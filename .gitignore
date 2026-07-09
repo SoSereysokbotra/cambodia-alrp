@@ -1,0 +1,78 @@
+# ======================================================================
+# Cambodian ALPR — .gitignore
+# Keep: code, scripts, docs, small configs, small metrics.
+# Ignore: datasets, model weights, venv, training runs, secrets.
+# ======================================================================
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
+ENV/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# --- Secrets / credentials (NEVER commit your Roboflow API key) ---
+.env
+.env.*
+*.key
+secrets.*
+**/roboflow_config.*
+
+# --- Datasets (large, regenerable / downloaded from Roboflow) ---
+data/raw/
+data/interim/
+data/annotated/
+data/auto_labeled/
+data/**/images/
+data/**/labels/
+*.zip
+# ...but keep the metadata log and folder structure:
+!data/metadata/
+!data/metadata/*.csv
+!data/**/.gitkeep
+
+# --- Model weights (large binaries) ---
+models/
+*.pt
+*.pth
+*.onnx
+*.engine
+*.weights
+# YOLOv10 base weights auto-downloaded to the project root:
+yolov10*.pt
+yolo26*.pt
+yolo11*.pt
+
+# --- Training / inference outputs ---
+runs/
+outputs/
+results/
+logs/
+wandb/
+*.log
+
+# --- Metrics: keep the small JSON/TXT summaries, ignore heavy artifacts ---
+metrics/*.png
+metrics/*.jpg
+
+# --- Cloned reference repos (external, have their own git history) ---
+third_party/
+
+# --- OS / editor cruft ---
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+*~
