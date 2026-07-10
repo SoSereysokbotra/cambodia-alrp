@@ -1,0 +1,18 @@
+==============================================
+ WEEK 2 SUMMARY
+==============================================
+ Dataset:      Plate_v4 (3,299 Cambodian plates)
+ Credit:       Plate_v4 (taki-dk0de, CC BY 4.0)
+ Model:        YOLOv10 nano
+ Training run: plate_detector_week2
+----------------------------------------------
+ mAP50:        0.9664  [TARGET >= 0.82]  ✓
+ mAP50-95:     0.7259
+ Precision:    0.9540
+ Recall:       0.9437
+ Latency:      8.0 ms  [TARGET < 120 ms]  ✓
+ Model size:   5.5 MB
+ Model path:   models/detection/best.pt
+----------------------------------------------
+ Status:       READY FOR WEEK 3
+==============================================

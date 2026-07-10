@@ -33,6 +33,8 @@ data/raw/
 data/interim/
 data/annotated/
 data/auto_labeled/
+data/crnn_crops/
+data/synthetic/
 data/**/images/
 data/**/labels/
 *.zip

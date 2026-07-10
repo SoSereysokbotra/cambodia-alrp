@@ -107,7 +107,7 @@ def main() -> None:
     print(report)
 
     SUMMARY_TXT.parent.mkdir(parents=True, exist_ok=True)
-    SUMMARY_TXT.write_text(report + "\n")
+    SUMMARY_TXT.write_text(report + "\n", encoding="utf-8")
     print(f"\n[OK] summary saved -> {SUMMARY_TXT}")
 
 
