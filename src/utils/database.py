@@ -3,21 +3,13 @@ src/utils/database.py
 =====================
 SQLite database module for the Cambodian ALPR system.
 
-Two tables:
+Schema conforms to docs/database.md:
   * registered_plates  — the whitelist (who is allowed through the gate)
-  * plate_reads        — the audit log (every detection, allowed or denied)
+  * plate_reads        — the audit log (every detection + decision)
+  * system_metrics     — periodic health/performance samples
 
 SQLite stores TEXT as UTF-8, so Khmer plate text (e.g. "ភ្នំពេញ 1AB-2345")
 is handled natively.
-
-Example
--------
-    from utils.database import PlateDatabase
-    db = PlateDatabase("plates.db")
-    db.add_plate("ភ្នំពេញ 1AB-2345", "Sokhem Ouch", "Honda Civic")
-    db.is_registered("ភ្នំពេញ 1AB-2345")          # -> True
-    db.log_read("PLATE_1_DETECTED", 0.92, False, "ENTRY_DENIED")
-    db.close()
 """
 
 from __future__ import annotations
@@ -25,19 +17,22 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+VALID_ACTIONS = (
+    "ENTRY_ALLOWED", "ENTRY_DENIED", "REVIEW_REQUIRED", "MANUAL_OVERRIDE", "ERROR",
+)
+
 
 class PlateDatabase:
-    """Thin, safe wrapper over the SQLite whitelist + audit log."""
+    """Whitelist + audit log + metrics, matching docs/database.md."""
 
     def __init__(self, db_path: str | Path = "plates.db") -> None:
         self.db_path = str(db_path)
-        # check_same_thread=False keeps it usable from simple scripts/threads.
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
-        self.conn.row_factory = sqlite3.Row  # rows behave like dicts
+        self.conn.row_factory = sqlite3.Row
         self._create_tables()
 
     # ------------------------------------------------------------------ #
-    # Schema
+    # Schema (exactly as docs/database.md)
     # ------------------------------------------------------------------ #
     def _create_tables(self) -> None:
         cur = self.conn.cursor()
@@ -46,10 +41,12 @@ class PlateDatabase:
             CREATE TABLE IF NOT EXISTS registered_plates (
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
                 plate_text      TEXT UNIQUE NOT NULL,
-                owner_name      TEXT,
+                owner_name      TEXT NOT NULL,
                 vehicle_type    TEXT,
                 registered_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 status          TEXT DEFAULT 'active'
+                                CHECK (status IN ('active', 'suspended', 'expired')),
+                notes           TEXT
             )
             """
         )
@@ -57,13 +54,31 @@ class PlateDatabase:
             """
             CREATE TABLE IF NOT EXISTS plate_reads (
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                detected_plate  TEXT,
-                yolo_confidence REAL,
+                plate_text      TEXT,
+                detected_plate  TEXT NOT NULL,
+                yolo_confidence REAL CHECK (yolo_confidence >= 0.0 AND yolo_confidence <= 1.0),
+                crnn_confidence REAL CHECK (crnn_confidence >= 0.0 AND crnn_confidence <= 1.0),
                 timestamp       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                is_registered   INTEGER,
-                action          TEXT,
-                photo_path      TEXT,
-                notes           TEXT
+                location        TEXT DEFAULT 'Main Gate',
+                action          TEXT CHECK (action IN
+                                ('ENTRY_ALLOWED','ENTRY_DENIED','REVIEW_REQUIRED',
+                                 'MANUAL_OVERRIDE','ERROR')),
+                photo_path      TEXT
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS system_metrics (
+                id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp              TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                fps                    REAL,
+                avg_latency_ms         REAL,
+                gpu_memory_mb          REAL,
+                cpu_usage_percent      REAL,
+                rtsp_connected         INTEGER,
+                total_detections_today INTEGER,
+                uptime_percent         REAL
             )
             """
         )
@@ -72,26 +87,25 @@ class PlateDatabase:
     # ------------------------------------------------------------------ #
     # Whitelist operations
     # ------------------------------------------------------------------ #
-    def add_plate(self, plate_text: str, owner_name: str = "",
-                  vehicle_type: str = "") -> bool:
-        """Register a plate. Returns False if it already exists / on error."""
+    def add_plate(self, plate_text: str, owner_name: str,
+                  vehicle_type: str = "", notes: str | None = None) -> bool:
+        """Register a plate. owner_name is required (NOT NULL). False on dup/error."""
         try:
             self.conn.execute(
-                "INSERT INTO registered_plates (plate_text, owner_name, vehicle_type) "
-                "VALUES (?, ?, ?)",
-                (plate_text, owner_name, vehicle_type),
+                "INSERT INTO registered_plates "
+                "(plate_text, owner_name, vehicle_type, notes) VALUES (?, ?, ?, ?)",
+                (plate_text, owner_name or "unknown", vehicle_type, notes),
             )
             self.conn.commit()
             return True
         except sqlite3.IntegrityError:
-            # UNIQUE constraint — plate already registered.
             return False
         except sqlite3.Error as exc:
             print(f"[PlateDatabase] add_plate error: {exc}")
             return False
 
     def is_registered(self, plate_text: str) -> bool:
-        """True if the plate exists AND is 'active'."""
+        """True if the plate exists AND is 'active' (SRS SEC-002 exact match)."""
         try:
             row = self.conn.execute(
                 "SELECT 1 FROM registered_plates "
@@ -103,25 +117,67 @@ class PlateDatabase:
             print(f"[PlateDatabase] is_registered error: {exc}")
             return False
 
+    def suspend_plate(self, plate_text: str) -> bool:
+        """Set a plate's status to 'suspended' (SRS ADM-002)."""
+        try:
+            cur = self.conn.execute(
+                "UPDATE registered_plates SET status = 'suspended' WHERE plate_text = ?",
+                (plate_text,),
+            )
+            self.conn.commit()
+            return cur.rowcount > 0
+        except sqlite3.Error as exc:
+            print(f"[PlateDatabase] suspend_plate error: {exc}")
+            return False
+
     # ------------------------------------------------------------------ #
     # Audit log
     # ------------------------------------------------------------------ #
-    def log_read(self, detected_plate: str, yolo_conf: float,
-                 is_registered: bool, action: str,
-                 photo_path: str | None = None, notes: str | None = None) -> bool:
-        """Append one detection event to the audit log."""
+    def log_read(self, detected_plate: str, yolo_confidence: float,
+                 crnn_confidence: float, action: str,
+                 plate_text: str | None = None, location: str = "Main Gate",
+                 photo_path: str | None = None) -> bool:
+        """Append one detection event to the audit log (docs/database.md).
+
+        detected_plate : what the CRNN actually read.
+        plate_text     : the matched whitelist plate (None if no match).
+        action         : one of VALID_ACTIONS.
+        """
+        if action not in VALID_ACTIONS:
+            action = "ERROR"
         try:
             self.conn.execute(
                 "INSERT INTO plate_reads "
-                "(detected_plate, yolo_confidence, is_registered, action, "
-                " photo_path, notes) VALUES (?, ?, ?, ?, ?, ?)",
-                (detected_plate, float(yolo_conf), 1 if is_registered else 0,
-                 action, photo_path, notes),
+                "(plate_text, detected_plate, yolo_confidence, crnn_confidence, "
+                " location, action, photo_path) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (plate_text, detected_plate, _clamp(yolo_confidence),
+                 _clamp(crnn_confidence), location, action, photo_path),
             )
             self.conn.commit()
             return True
         except sqlite3.Error as exc:
             print(f"[PlateDatabase] log_read error: {exc}")
+            return False
+
+    def log_metrics(self, fps: float, avg_latency_ms: float,
+                    gpu_memory_mb: float = 0.0, cpu_usage_percent: float = 0.0,
+                    rtsp_connected: bool = False,
+                    total_detections_today: int = 0,
+                    uptime_percent: float = 100.0) -> bool:
+        """Insert one system_metrics sample (SRS HLT-002)."""
+        try:
+            self.conn.execute(
+                "INSERT INTO system_metrics "
+                "(fps, avg_latency_ms, gpu_memory_mb, cpu_usage_percent, "
+                " rtsp_connected, total_detections_today, uptime_percent) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (fps, avg_latency_ms, gpu_memory_mb, cpu_usage_percent,
+                 1 if rtsp_connected else 0, total_detections_today, uptime_percent),
+            )
+            self.conn.commit()
+            return True
+        except sqlite3.Error as exc:
+            print(f"[PlateDatabase] log_metrics error: {exc}")
             return False
 
     # ------------------------------------------------------------------ #
@@ -130,8 +186,7 @@ class PlateDatabase:
     def get_recent_reads(self, limit: int = 10) -> list[dict]:
         try:
             rows = self.conn.execute(
-                "SELECT * FROM plate_reads ORDER BY id DESC LIMIT ?",
-                (limit,),
+                "SELECT * FROM plate_reads ORDER BY id DESC LIMIT ?", (limit,)
             ).fetchall()
             return [dict(r) for r in rows]
         except sqlite3.Error as exc:
@@ -148,27 +203,49 @@ class PlateDatabase:
             print(f"[PlateDatabase] get_all_registered error: {exc}")
             return []
 
+    def search_reads(self, plate: str | None = None, action: str | None = None,
+                     date: str | None = None, limit: int = 100) -> list[dict]:
+        """Audit-log search by plate / action / date (YYYY-MM-DD) (SRS ADM-003)."""
+        where, params = [], []
+        if plate:
+            where.append("(detected_plate LIKE ? OR plate_text LIKE ?)")
+            params += [f"%{plate}%", f"%{plate}%"]
+        if action:
+            where.append("action = ?")
+            params.append(action)
+        if date:
+            where.append("DATE(timestamp, 'localtime') = ?")
+            params.append(date)
+        sql = "SELECT * FROM plate_reads"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY id DESC LIMIT ?"
+        params.append(limit)
+        try:
+            rows = self.conn.execute(sql, params).fetchall()
+            return [dict(r) for r in rows]
+        except sqlite3.Error as exc:
+            print(f"[PlateDatabase] search_reads error: {exc}")
+            return []
+
     def get_stats(self) -> dict:
-        """Summary counters. 'today' uses local calendar date."""
+        """Summary counters. 'today' uses the local calendar date."""
         stats = {"total_registered": 0, "total_reads": 0,
-                 "allowed_today": 0, "denied_today": 0}
+                 "allowed_today": 0, "denied_today": 0, "review_today": 0}
         try:
             cur = self.conn.cursor()
             stats["total_registered"] = cur.execute(
                 "SELECT COUNT(*) FROM registered_plates").fetchone()[0]
             stats["total_reads"] = cur.execute(
                 "SELECT COUNT(*) FROM plate_reads").fetchone()[0]
-            # Compare local dates (timestamps are stored UTC by SQLite).
-            stats["allowed_today"] = cur.execute(
-                "SELECT COUNT(*) FROM plate_reads "
-                "WHERE action = 'ENTRY_ALLOWED' "
-                "AND DATE(timestamp, 'localtime') = DATE('now', 'localtime')"
-            ).fetchone()[0]
-            stats["denied_today"] = cur.execute(
-                "SELECT COUNT(*) FROM plate_reads "
-                "WHERE action = 'ENTRY_DENIED' "
-                "AND DATE(timestamp, 'localtime') = DATE('now', 'localtime')"
-            ).fetchone()[0]
+            for key, act in (("allowed_today", "ENTRY_ALLOWED"),
+                             ("denied_today", "ENTRY_DENIED"),
+                             ("review_today", "REVIEW_REQUIRED")):
+                stats[key] = cur.execute(
+                    "SELECT COUNT(*) FROM plate_reads WHERE action = ? "
+                    "AND DATE(timestamp, 'localtime') = DATE('now', 'localtime')",
+                    (act,),
+                ).fetchone()[0]
         except sqlite3.Error as exc:
             print(f"[PlateDatabase] get_stats error: {exc}")
         return stats
@@ -179,3 +256,11 @@ class PlateDatabase:
             self.conn.close()
         except sqlite3.Error:
             pass
+
+
+def _clamp(v) -> float:
+    """Keep confidence within [0,1] so the CHECK constraint never rejects a row."""
+    try:
+        return max(0.0, min(1.0, float(v)))
+    except (TypeError, ValueError):
+        return 0.0

@@ -22,7 +22,7 @@ mqtt:
 
 gate:
   yolo_confidence_threshold: 0.50
-  crnn_confidence_threshold: 0.60
+  crnn_confidence_threshold: 0.70   # SRS REC-005: below this -> REVIEW_REQUIRED
 
 display:
   show_fps: true

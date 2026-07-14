@@ -1,0 +1,7 @@
+path: D:/Year2/Semester2/Deep Learning/Cambodian ALPR Project/data/number_detect
+train: train/images
+val: valid/images
+test: test/images
+
+nc: 1
+names: ['plate_number']

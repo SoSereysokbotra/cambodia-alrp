@@ -47,6 +47,9 @@ class ALPRSystem:
         cfg = self.config
         self.assume_crop = bool(cfg.get("assume_crop", False))
         self.open_duration = int(cfg.get("mqtt", {}).get("open_duration_sec", 3))
+        # SRS REC-005: reads below this confidence -> REVIEW_REQUIRED (gate stays shut)
+        self.crnn_conf_threshold = float(
+            cfg.get("gate", {}).get("crnn_confidence_threshold", 0.70))
 
         # --- models / db / camera / gate --- #
         self.detector = PlateDetector(_resolve(cfg["yolo_weights"]),
@@ -54,6 +57,22 @@ class ALPRSystem:
                                           "yolo_confidence_threshold", 0.5))
         self.reader = CRNNReader(_resolve(cfg["crnn_weights"]),
                                  _resolve(cfg["charset_path"]))
+
+        # Phase 3 (optional): province classifier -> compose "provinceKhmer number".
+        # If the classifier isn't trained yet, fall back to number-only.
+        self.province_classifier = None
+        self._compose_plate = None
+        prov_w = _resolve("models/recognition/province_classifier_best.pth")
+        if cfg.get("use_province", True) and prov_w.exists():
+            try:
+                from province_classifier import ProvinceClassifier
+                from province_map import compose_plate
+                self.province_classifier = ProvinceClassifier(prov_w)
+                self._compose_plate = compose_plate
+                print("[ALPRSystem] province classifier ON (province + number)")
+            except Exception as exc:
+                print(f"[ALPRSystem] province classifier unavailable: {exc}")
+
         self.database = PlateDatabase(_resolve(cfg["db_path"]))
         self.camera = RTSPReader(self._camera_source(cfg["camera_source"]))
         self.gate = create_gate_controller(cfg)
@@ -62,6 +81,7 @@ class ALPRSystem:
         self.session_processed = 0
         self.session_allowed = 0
         self.session_denied = 0
+        self.session_review = 0
         self.session_start = time.time()
 
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -110,9 +130,17 @@ class ALPRSystem:
 
         plates_result = []
         for det in detections:
-            # Stage 2 — CRNN
+            # Stage 2 — CRNN reads the number (returns text + confidence, REC-004)
             t2 = time.perf_counter()
-            plate_text = self.reader.read(det["crop"]) or "(unreadable)"
+            number, crnn_conf = self.reader.read(det["crop"])
+            number = number or "(unreadable)"
+            # Phase 3 — classify province and compose "provinceKhmer number"
+            prov_id = prov_conf = None
+            if self.province_classifier is not None:
+                prov_id, prov_conf = self.province_classifier.predict(det["crop"])
+                plate_text = self._compose_plate(prov_id, number)
+            else:
+                plate_text = number
             crnn_ms = (time.perf_counter() - t2) * 1000
 
             # Stage 3 — DB lookup
@@ -120,8 +148,12 @@ class ALPRSystem:
             is_reg = self.database.is_registered(plate_text)
             db_ms = (time.perf_counter() - t3) * 1000
 
-            # Stage 4 — gate decision
-            if is_reg:
+            # Stage 4 — gate decision (SRS REC-005 confidence gate + SEC-005 fail-safe)
+            if crnn_conf < self.crnn_conf_threshold:
+                # low confidence -> never open; flag for human review
+                action = "REVIEW_REQUIRED"
+                self.session_review += 1
+            elif is_reg:
                 self.gate.open_gate(plate_text, self.open_duration)
                 action = "ENTRY_ALLOWED"
                 self.session_allowed += 1
@@ -129,11 +161,21 @@ class ALPRSystem:
                 action = "ENTRY_DENIED"
                 self.session_denied += 1
 
-            self.database.log_read(plate_text, det["confidence"], is_reg, action)
+            self.database.log_read(
+                detected_plate=plate_text,
+                yolo_confidence=det["confidence"],
+                crnn_confidence=crnn_conf,
+                action=action,
+                plate_text=(plate_text if (is_reg and action == "ENTRY_ALLOWED") else None),
+            )
 
             plates_result.append({
                 "plate_text": plate_text,
+                "number": number,
+                "province_id": prov_id,
+                "province_confidence": (round(prov_conf, 4) if prov_conf is not None else None),
                 "confidence": det["confidence"],
+                "crnn_confidence": round(crnn_conf, 4),
                 "action": action,
                 "yolo_ms": yolo_ms,
                 "crnn_ms": crnn_ms,
@@ -245,6 +287,7 @@ class ALPRSystem:
             "processed": self.session_processed,
             "allowed": self.session_allowed,
             "denied": self.session_denied,
+            "review": self.session_review,
             "uptime_sec": round(time.time() - self.session_start, 1),
             "gate_status": self.gate.get_status(),
             "db_stats": self.database.get_stats(),

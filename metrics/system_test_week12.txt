@@ -1,7 +1,7 @@
 ==============================================
  CAMBODIAN ALPR - SYSTEM TEST (Week 12)
 ==============================================
-[1/6] GPU/CUDA ............ WARNING: CPU only
+[1/6] GPU/CUDA ............ OK: CUDA available
 [2/6] YOLOv10 model ....... OK: mAP50=0.9664, 8.0ms
 [3/6] CRNN model .......... OK: CER=0.00%, charset=38
 [4/6] Database ............ OK (16 plates)
@@ -10,8 +10,8 @@
 
 Running 10-frame pipeline test ...
   detections: 10/10 frames had >=1 plate
-  max DB lookup: 0.15 ms
-  max total latency: 92.4 ms
+  max DB lookup: 0.10 ms
+  max total latency: 22.2 ms
 
 ==============================================
  SYSTEM TEST: PASS

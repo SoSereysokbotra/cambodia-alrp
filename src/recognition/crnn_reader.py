@@ -38,6 +38,9 @@ class CRNNReader:
         self.model = load_crnn(weights_path, device=self.device, charset=charset,
                                img_h=img_h, img_w=img_w)
         self.decoder = CTCDecoder(charset, len(charset))
+        # A plausible Cambodian plate number has ~5+ characters; shorter reads
+        # get their confidence scaled down (used by the REC-005 gate).
+        self.min_plausible_len = 5
         self._latencies: list[float] = []
         self._warmup()
 
@@ -62,24 +65,42 @@ class CRNNReader:
         t = torch.from_numpy(arr).unsqueeze(0).unsqueeze(0)  # (1,1,H,W)
         return t.to(self.device)
 
-    def _infer(self, crop) -> str:
+    def _infer(self, crop) -> tuple[str, float]:
+        """Return (text, confidence). Confidence = mean of the per-timestep max
+        softmax probabilities over the non-blank (character-emitting) timesteps —
+        i.e. the average per-character confidence (SRS REC-004)."""
         t = self._preprocess(crop)
         with torch.no_grad():
-            log_probs = self.model(t)          # (seq, 1, classes)
-        return self.decoder.decode(log_probs.cpu().squeeze(1))
+            log_probs = self.model(t)              # (seq, 1, classes), log-softmax
+        seq = log_probs.cpu().squeeze(1)           # (seq, classes)
+        probs = seq.exp()                          # back to probabilities
+        maxp, argmax = probs.max(dim=1)            # (seq,), (seq,)
+        text = self.decoder._collapse(argmax)      # greedy CTC collapse
+        mask = argmax != self.decoder.blank        # non-blank timesteps
+        raw_conf = float(maxp[mask].mean()) if bool(mask.any()) else 0.0
+        # Length plausibility: a real Cambodian plate number is ~5-9 chars.
+        # An implausibly short read (e.g. a single spurious char on a blank/
+        # non-plate crop) is penalised so it falls below the REVIEW threshold.
+        n = len(text.replace(" ", "").replace("-", ""))
+        length_factor = min(1.0, n / self.min_plausible_len)
+        return text, raw_conf * length_factor
 
-    def read(self, crop) -> str:
-        """Read plate text from a crop. Returns '' on failure (never raises)."""
+    def read(self, crop) -> tuple[str, float]:
+        """Read plate text from a crop.
+
+        Returns (text, confidence). On failure returns ("", 0.0) — never raises.
+        NOTE: as of the SRS-alignment work this returns a TUPLE, not just text.
+        """
         if crop is None or getattr(crop, "size", 0) == 0:
-            return ""
+            return "", 0.0
         try:
             t0 = time.perf_counter()
-            text = self._infer(crop)
+            text, conf = self._infer(crop)
             self._latencies.append((time.perf_counter() - t0) * 1000.0)
-            return text
+            return text, conf
         except Exception as exc:
             print(f"[CRNNReader] read() error: {exc}")
-            return ""
+            return "", 0.0
 
     def get_avg_latency_ms(self) -> float:
         if not self._latencies:

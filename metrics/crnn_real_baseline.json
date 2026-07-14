@@ -1,0 +1,10 @@
+{
+  "tag": "baseline",
+  "split": "test",
+  "weights": "crnn_best.pth",
+  "n": 149,
+  "cer": 0.9489,
+  "word_accuracy": 0.0,
+  "mean_confidence": 0.4292,
+  "below_gate_pct": 0.8523
+}

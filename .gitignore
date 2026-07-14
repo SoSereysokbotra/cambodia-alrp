@@ -78,3 +78,6 @@ desktop.ini
 .idea/
 *.swp
 *~
+
+# --- Local DB backups ---
+backups/

@@ -1,0 +1,10 @@
+{
+  "tag": "finetuned",
+  "split": "test",
+  "weights": "crnn_finetuned.pth",
+  "n": 149,
+  "cer": 0.2593,
+  "word_accuracy": 0.4765,
+  "mean_confidence": 0.7924,
+  "below_gate_pct": 0.2685
+}
