@@ -3,8 +3,8 @@
   "split": "test",
   "weights": "crnn_finetuned.pth",
   "n": 149,
-  "cer": 0.2593,
-  "word_accuracy": 0.4765,
-  "mean_confidence": 0.7924,
-  "below_gate_pct": 0.2685
+  "cer": 0.1021,
+  "word_accuracy": 0.7248,
+  "mean_confidence": 0.9007,
+  "below_gate_pct": 0.0738
 }

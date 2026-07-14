@@ -1,0 +1,134 @@
+{
+  "passed": 16,
+  "total": 16,
+  "checks": [
+    {
+      "req": "DET-001",
+      "desc": "Plate detector mAP@50 >= 0.80",
+      "target": ">=0.80",
+      "measured": "0.9664",
+      "pass": true,
+      "source": "week2_metrics.json"
+    },
+    {
+      "req": "PERF-003",
+      "desc": "YOLO inference < 50 ms",
+      "target": "<50ms",
+      "measured": "8.0ms",
+      "pass": true,
+      "source": "week2_metrics.json"
+    },
+    {
+      "req": "DET-002",
+      "desc": "Number detector mAP@50 >= 0.80",
+      "target": ">=0.80",
+      "measured": "0.9574",
+      "pass": true,
+      "source": "number_detector/results.csv"
+    },
+    {
+      "req": "REC-001",
+      "desc": "CRNN CER on REAL test <= 15%",
+      "target": "<=15%",
+      "measured": "10.21%",
+      "pass": true,
+      "source": "crnn_real_finetuned.json"
+    },
+    {
+      "req": "REC-001b",
+      "desc": "CRNN word-accuracy on REAL test > 70%",
+      "target": ">70%",
+      "measured": "72.48%",
+      "pass": true,
+      "source": "crnn_real_finetuned.json"
+    },
+    {
+      "req": "DB-001",
+      "desc": "Schema matches database.md",
+      "target": "conform",
+      "measured": "ok",
+      "pass": true,
+      "source": "plates.db"
+    },
+    {
+      "req": "REC-002",
+      "desc": "Khmer province + Latin number composed",
+      "target": "compose",
+      "measured": "province clf ON",
+      "pass": true,
+      "source": "live"
+    },
+    {
+      "req": "PERF-002",
+      "desc": "End-to-end latency (avg) < 500 ms",
+      "target": "<500ms",
+      "measured": "57ms/p95 71",
+      "pass": true,
+      "source": "live"
+    },
+    {
+      "req": "PERF-001",
+      "desc": "Throughput >= 15 FPS",
+      "target": ">=15",
+      "measured": "17.7",
+      "pass": true,
+      "source": "live"
+    },
+    {
+      "req": "REC-004",
+      "desc": "CRNN confidence in [0,1]",
+      "target": "[0,1]",
+      "measured": "in range",
+      "pass": true,
+      "source": "live"
+    },
+    {
+      "req": "REC-005",
+      "desc": "Below-gate read -> not ENTRY_ALLOWED",
+      "target": "closed",
+      "measured": "held",
+      "pass": true,
+      "source": "live"
+    },
+    {
+      "req": "SEC-002",
+      "desc": "Zero false accepts on real test set",
+      "target": "0",
+      "measured": "0",
+      "pass": true,
+      "source": "live"
+    },
+    {
+      "req": "LOG-001",
+      "desc": "Reads logged w/ both confidences + action",
+      "target": "complete",
+      "measured": "83 rows",
+      "pass": true,
+      "source": "live"
+    },
+    {
+      "req": "HLT-002",
+      "desc": "system_metrics sample written",
+      "target": "row",
+      "measured": "ok",
+      "pass": true,
+      "source": "live"
+    },
+    {
+      "req": "MAN-001",
+      "desc": "Manual override opens gate + logs",
+      "target": "logged",
+      "measured": "ok",
+      "pass": true,
+      "source": "live"
+    },
+    {
+      "req": "SEC-005",
+      "desc": "Fail-safe: E-stop holds registered plate CLOSED",
+      "target": "closed",
+      "measured": "held",
+      "pass": true,
+      "source": "live"
+    }
+  ]
+}

@@ -4,8 +4,9 @@
 # =====================================================================
 
 camera_source: "data/annotated/test/images/"   # webcam=0, rtsp url, video, or folder
-yolo_weights: "models/detection/best.pt"
-crnn_weights: "models/recognition/crnn_best.pth"
+yolo_weights: "models/detection/best.pt"             # province-line detector
+number_weights: "models/detection/number_best.pt"    # number-line detector (two-detector flow)
+crnn_weights: "models/recognition/crnn_finetuned.pth"  # fine-tuned on real number crops (Phase 4)
 charset_path: "models/recognition/charset.txt"
 db_path: "plates.db"
 
@@ -22,6 +23,7 @@ mqtt:
 
 gate:
   yolo_confidence_threshold: 0.50
+  number_confidence_threshold: 0.40  # number-line detector (number_best.pt)
   crnn_confidence_threshold: 0.70   # SRS REC-005: below this -> REVIEW_REQUIRED
 
 display:
@@ -38,3 +40,9 @@ output:
 logging:
   level: "INFO"
   log_dir: "logs/"
+
+# SRS Phase 9 — health monitoring & alerts (HLT-001/002/003, PERF-004, AVAIL-001)
+health:
+  metrics_every_frames: 100     # write a system_metrics sample every N frames
+  latency_alert_ms: 500         # alert if avg end-to-end latency exceeds this
+  disconnect_alert_sec: 15      # alert if the camera stays disconnected this long
