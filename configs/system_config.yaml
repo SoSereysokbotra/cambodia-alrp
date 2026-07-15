@@ -3,7 +3,15 @@
 # All paths are relative to the project root.
 # =====================================================================
 
-camera_source: "data/annotated/test/images/"   # webcam=0, rtsp url, video, or folder
+camera_source: "http://10.1.64.129:8080/video"   # webcam=0, rtsp url, video, or folder
+# SRS Phase 5 — live smartphone RTSP input (VID-001..004). Point camera_source at a
+# phone stream, e.g. Android "IP Webcam": rtsp://<phone-ip>:8080/h264_ulaw.sdp
+#   or MJPEG over http: http://<phone-ip>:8080/video ; iOS: use Iriun / Larix.
+camera:
+  reconnect_interval_sec: 5      # VID-001: wait between reconnect attempts
+  max_reconnect_attempts: 10     # VID-001: give up after this many attempts
+  queue_size: 5                  # VID-004: bounded buffer, keep only latest frame
+  frame_timeout_sec: 2.0         # get_frame() wait before returning None
 yolo_weights: "models/detection/best.pt"             # province-line detector
 number_weights: "models/detection/number_best.pt"    # number-line detector (two-detector flow)
 crnn_weights: "models/recognition/crnn_finetuned.pth"  # fine-tuned on real number crops (Phase 4)
@@ -25,6 +33,7 @@ gate:
   yolo_confidence_threshold: 0.50
   number_confidence_threshold: 0.40  # number-line detector (number_best.pt)
   crnn_confidence_threshold: 0.70   # SRS REC-005: below this -> REVIEW_REQUIRED
+  location: "Main Gate"             # logged with every read (DB location column)
 
 display:
   show_fps: true
@@ -36,6 +45,15 @@ output:
   save_annotated: true
   save_crops: false
   output_dir: "outputs/"
+  photo_dir: "photos/"          # SRS LOG-002: per-read evidence photos
+
+# SRS Phase 6 — detection crop margin (DET-005)
+# NOTE: kept at 0.0. Padding the crops fed to the fine-tuned CRNN regresses
+# end-to-end number accuracy 70.6% -> 46.2% (the CRNN was fine-tuned on TIGHT
+# number crops). DET-005's "margin of context" is instead satisfied by the
+# full-frame evidence photo saved per read (LOG-002). Documented deviation.
+detection:
+  crop_padding: 0.0            # expand each bbox by this fraction before cropping
 
 logging:
   level: "INFO"

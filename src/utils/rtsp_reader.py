@@ -24,12 +24,19 @@ VIDEO_EXTS = {".mp4", ".avi", ".mov", ".mkv", ".flv", ".wmv"}
 
 
 class RTSPReader:
-    def __init__(self, source, queue_size: int = 5, log_interval: int = 30) -> None:
+    def __init__(self, source, queue_size: int = 5, log_interval: int = 30,
+                 reconnect_interval: float = 5.0,
+                 max_reconnect_attempts: int = 10) -> None:
         self.source_raw = source
         self.mode = self._detect_mode(source)
         self.log_interval = log_interval
+        # SRS VID-001: reconnect every `reconnect_interval` s, up to `max` attempts.
+        self.reconnect_interval = float(reconnect_interval)
+        self.max_reconnect_attempts = int(max_reconnect_attempts)
 
         self._latest = None
+        self._latest_ts = 0.0                       # VID-002: capture time (epoch s)
+        self.frame_timestamp_ms = 0.0               # capture time of last get_frame()
         self._lock = threading.Lock()
         self._new = threading.Event()
         self._stop = threading.Event()
@@ -109,6 +116,7 @@ class RTSPReader:
 
             with self._lock:
                 self._latest = frame
+                self._latest_ts = time.time()       # VID-002: acquisition timestamp
                 self._new.set()
 
             dt = time.time() - t0
@@ -131,13 +139,20 @@ class RTSPReader:
 
     # ------------------------------------------------------------------ #
     def get_frame(self, timeout: float = 2.0):
-        """Return the latest frame, or None after `timeout` seconds."""
+        """Return the latest frame, or None after `timeout` seconds. Also records
+        that frame's acquisition time in `self.frame_timestamp_ms` (VID-002)."""
         if self._new.wait(timeout=timeout):
             with self._lock:
                 frame = None if self._latest is None else self._latest.copy()
+                self.frame_timestamp_ms = self._latest_ts * 1000.0
             self._new.clear()
             return frame
         return None
+
+    def get_frame_ts(self, timeout: float = 2.0):
+        """Like get_frame() but returns (frame, capture_time_ms) (VID-002)."""
+        frame = self.get_frame(timeout=timeout)
+        return frame, self.frame_timestamp_ms
 
     def get_fps(self) -> float:
         return round(self._fps, 1)
@@ -145,13 +160,19 @@ class RTSPReader:
     def is_connected(self) -> bool:
         return self._connected
 
-    def reconnect(self, retries: int = 3) -> bool:
+    def reconnect(self, retries: int | None = None) -> bool:
+        """SRS VID-001: retry the source every `reconnect_interval` s, up to
+        `max_reconnect_attempts` times (defaults from config)."""
+        retries = self.max_reconnect_attempts if retries is None else retries
         for i in range(retries):
-            print(f"[RTSPReader] reconnect attempt {i + 1}/{retries} ...")
+            print(f"[RTSPReader] reconnect attempt {i + 1}/{retries} "
+                  f"(every {self.reconnect_interval:.0f}s) ...")
             if self._open_capture():
                 print("[RTSPReader] reconnected.")
                 return True
-            time.sleep(1.0)
+            if self._stop.is_set():
+                break
+            time.sleep(self.reconnect_interval)
         return False
 
     def stop(self) -> None:

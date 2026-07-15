@@ -119,15 +119,32 @@ class PlateDatabase:
 
     def suspend_plate(self, plate_text: str) -> bool:
         """Set a plate's status to 'suspended' (SRS ADM-002)."""
+        return self.set_status(plate_text, "suspended")
+
+    def set_status(self, plate_text: str, status: str) -> bool:
+        """Set a plate's status to 'active' / 'suspended' / 'expired' (ADM-002)."""
+        if status not in ("active", "suspended", "expired"):
+            return False
         try:
             cur = self.conn.execute(
-                "UPDATE registered_plates SET status = 'suspended' WHERE plate_text = ?",
-                (plate_text,),
+                "UPDATE registered_plates SET status = ? WHERE plate_text = ?",
+                (status, plate_text),
             )
             self.conn.commit()
             return cur.rowcount > 0
         except sqlite3.Error as exc:
-            print(f"[PlateDatabase] suspend_plate error: {exc}")
+            print(f"[PlateDatabase] set_status error: {exc}")
+            return False
+
+    def remove_plate(self, plate_text: str) -> bool:
+        """Delete a plate from the whitelist entirely."""
+        try:
+            cur = self.conn.execute(
+                "DELETE FROM registered_plates WHERE plate_text = ?", (plate_text,))
+            self.conn.commit()
+            return cur.rowcount > 0
+        except sqlite3.Error as exc:
+            print(f"[PlateDatabase] remove_plate error: {exc}")
             return False
 
     # ------------------------------------------------------------------ #

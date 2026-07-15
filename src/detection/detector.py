@@ -87,8 +87,14 @@ class PlateDetector:
     # ------------------------------------------------------------------ #
     # Core inference
     # ------------------------------------------------------------------ #
-    def detect(self, image) -> list[dict]:
+    def detect(self, image, pad: float = 0.0) -> list[dict]:
         """Run detection on a single BGR numpy image.
+
+        Parameters
+        ----------
+        pad : fraction to expand each bbox by before cropping (SRS DET-005,
+              e.g. 0.10 = 10% margin of context), clamped to the image bounds.
+              The returned "bbox" stays tight (for drawing); only "crop" is padded.
 
         Returns a list of dicts:
             [{"bbox": (x1, y1, x2, y2),
@@ -121,7 +127,15 @@ class PlateDetector:
                 y1, y2 = max(0, min(y1, h - 1)), max(0, min(y2, h))
                 if x2 <= x1 or y2 <= y1:
                     continue  # degenerate box, skip
-                crop = image[y1:y2, x1:x2].copy()
+                # DET-005: expand the crop by `pad` on each side (clamped),
+                # keeping the reported bbox tight for visualisation.
+                if pad > 0:
+                    dx, dy = int((x2 - x1) * pad), int((y2 - y1) * pad)
+                    cx1, cy1 = max(0, x1 - dx), max(0, y1 - dy)
+                    cx2, cy2 = min(w, x2 + dx), min(h, y2 + dy)
+                else:
+                    cx1, cy1, cx2, cy2 = x1, y1, x2, y2
+                crop = image[cy1:cy2, cx1:cx2].copy()
                 detections.append({
                     "bbox": (x1, y1, x2, y2),
                     "confidence": float(b.conf[0]),

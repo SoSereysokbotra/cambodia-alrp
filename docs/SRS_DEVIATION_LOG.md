@@ -49,7 +49,9 @@ composed as `provinceKhmer + " " + number` — see Implementation Plan Phase 3
 Phase 3, the full `provinceKhmer + number` string is produced (REC-002/REC-006).
 
 **Approval Date:** 2026-07-11
-**Status:** Interim deviation; closes when Phase 3 is complete.
+**Status:** ✅ RESOLVED (2026-07-14). Phase 3 + 4 complete: province classifier
+(26-class, 97.18%) + fine-tuned CRNN compose `provinceKhmer + " " + number`;
+real-plate CER 10.21%, word-acc 72.48%. REC-002/REC-006 satisfied.
 
 ---
 
@@ -72,4 +74,28 @@ gate behaviour and status logging on the ESP32.
 
 ---
 
-*Deviation log v1.0 — reviewed against `docs/srs.md` v2.0.*
+## DEV-004 — DET-005: 10% Crop Padding
+
+**SRS Requirement (DET-005):** expand each detection bbox by 10% before cropping
+so crops include a small margin of context.
+
+**Actual Implementation:** padding is implemented in `PlateDetector.detect(pad=…)`
+and config-exposed (`detection.crop_padding`) but **kept at 0.0** for the
+recognition path.
+
+**Justification:** the CRNN is fine-tuned on **tight** number crops. Measured
+end-to-end, feeding it 10%-padded crops regresses number accuracy from **70.6%
+to 46.2%** (and would raise CER well past the ≤15% target). Tight crops are
+required to hit REC-001.
+
+**How DET-005's intent is met instead:** every read now saves the **full
+annotated frame** as an evidence photo (`photos/plate_{ts}_{PLATE}.jpg`,
+LOG-002) — maximal surrounding context, better than a 10% margin for audit.
+
+**Approval Date:** 2026-07-15
+**Status:** Intentional deviation; padding capability retained (config-toggleable)
+but disabled because it conflicts with the fine-tuned recogniser.
+
+---
+
+*Deviation log v1.1 — reviewed against `docs/srs.md` v2.0.*

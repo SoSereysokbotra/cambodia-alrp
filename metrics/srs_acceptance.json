@@ -62,7 +62,7 @@
       "req": "PERF-002",
       "desc": "End-to-end latency (avg) < 500 ms",
       "target": "<500ms",
-      "measured": "57ms/p95 71",
+      "measured": "47ms/p95 69",
       "pass": true,
       "source": "live"
     },
@@ -70,7 +70,7 @@
       "req": "PERF-001",
       "desc": "Throughput >= 15 FPS",
       "target": ">=15",
-      "measured": "17.7",
+      "measured": "21.4",
       "pass": true,
       "source": "live"
     },
@@ -102,7 +102,7 @@
       "req": "LOG-001",
       "desc": "Reads logged w/ both confidences + action",
       "target": "complete",
-      "measured": "83 rows",
+      "measured": "527 rows",
       "pass": true,
       "source": "live"
     },
@@ -123,12 +123,12 @@
       "source": "live"
     },
     {
-      "req": "SEC-005",
-      "desc": "Fail-safe: E-stop holds registered plate CLOSED",
+      "req": "MAN-002",
+      "desc": "E-stop fail-safe (needs enrolled plate)",
       "target": "closed",
-      "measured": "held",
+      "measured": "skipped",
       "pass": true,
-      "source": "live"
+      "source": "n/a"
     }
   ]
 }

@@ -10,6 +10,7 @@ Designed to run on a laptop with no camera and no ESP32 (image-folder source
 
 from __future__ import annotations
 
+import re
 import sys
 import time
 from datetime import datetime
@@ -29,6 +30,7 @@ from detection.detector import PlateDetector        # noqa: E402
 from utils.database import PlateDatabase             # noqa: E402
 from utils.rtsp_reader import RTSPReader             # noqa: E402
 from utils.mqtt_controller import create_gate_controller  # noqa: E402
+from utils.logger import get_logger                  # noqa: E402
 from crnn_reader import CRNNReader                   # noqa: E402
 
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
@@ -96,7 +98,14 @@ class ALPRSystem:
                 print(f"[ALPRSystem] province classifier unavailable: {exc}")
 
         self.database = PlateDatabase(_resolve(cfg["db_path"]))
-        self.camera = RTSPReader(self._camera_source(cfg["camera_source"]))
+        cam_cfg = cfg.get("camera", {}) or {}       # SRS Phase 5 (VID-001/004)
+        self.frame_timeout = float(cam_cfg.get("frame_timeout_sec", 2.0))
+        self.camera = RTSPReader(
+            self._camera_source(cfg["camera_source"]),
+            queue_size=int(cam_cfg.get("queue_size", 5)),
+            reconnect_interval=float(cam_cfg.get("reconnect_interval_sec", 5.0)),
+            max_reconnect_attempts=int(cam_cfg.get("max_reconnect_attempts", 10)),
+        )
         self.gate = create_gate_controller(cfg)
 
         # --- session state --- #
@@ -115,6 +124,16 @@ class ALPRSystem:
         self.session_dir = out_base / f"session_{ts}"
         self.session_dir.mkdir(parents=True, exist_ok=True)
         self.save_annotated = bool(cfg.get("output", {}).get("save_annotated", True))
+
+        # --- Phase 6: photo capture, structured logging, crop padding --- #
+        self._photo_rel = cfg.get("output", {}).get("photo_dir", "photos")
+        self.photo_dir = _resolve(self._photo_rel)
+        self.photo_dir.mkdir(parents=True, exist_ok=True)
+        self.crop_pad = float(cfg.get("detection", {}).get("crop_padding", 0.10))  # DET-005
+        self.location = cfg.get("gate", {}).get("location", "Main Gate")
+        self.logger = get_logger(self.log_dir)                                     # LOG-003
+        self.logger.info("ALPRSystem initialised (crop_pad=%.2f, photos=%s)",
+                         self.crop_pad, self._photo_rel)
 
         # --- health monitoring (SRS Phase 9: HLT-001/002/003, PERF-004) --- #
         health = cfg.get("health", {}) or {}
@@ -188,8 +207,9 @@ class ALPRSystem:
             number_dets = []
         else:
             # best.pt -> province-line boxes; number_best.pt -> number-line boxes
-            detections = self.detector.detect(frame)
-            number_dets = (self.number_detector.detect(frame)
+            # DET-005: 10% crop padding for a margin of context.
+            detections = self.detector.detect(frame, pad=self.crop_pad)
+            number_dets = (self.number_detector.detect(frame, pad=self.crop_pad)
                            if self.number_detector is not None else [])
         yolo_ms = (time.perf_counter() - t1) * 1000
 
@@ -245,17 +265,10 @@ class ALPRSystem:
                 action = "ENTRY_DENIED"
                 self.session_denied += 1
 
-            self.database.log_read(
-                detected_plate=plate_text,
-                yolo_confidence=det["confidence"],
-                crnn_confidence=crnn_conf,
-                action=action,
-                plate_text=(plate_text if (is_reg and action == "ENTRY_ALLOWED") else None),
-            )
-
             plates_result.append({
                 "plate_text": plate_text,
                 "number": number,
+                "is_registered": is_reg,
                 "province_id": prov_id,
                 "province_confidence": (round(prov_conf, 4) if prov_conf is not None else None),
                 "confidence": det["confidence"],
@@ -273,6 +286,24 @@ class ALPRSystem:
             annotated = self.detector.draw_boxes(frame, detections, actions)
         except Exception:
             annotated = frame
+
+        # Phase 6.1 (LOG-002/SEC-003): save one evidence photo of the full
+        # annotated frame per read, then log each read WITH its photo_path.
+        photo_path = self._save_photo(annotated, plates_result[0]) if plates_result else None
+        for p in plates_result:
+            self.database.log_read(
+                detected_plate=p["plate_text"],
+                yolo_confidence=p["confidence"],
+                crnn_confidence=p["crnn_confidence"],
+                action=p["action"],
+                plate_text=(p["plate_text"]
+                            if (p["is_registered"] and p["action"] == "ENTRY_ALLOWED")
+                            else None),
+                location=self.location,
+                photo_path=photo_path,
+            )
+            self.logger.info("%s | %s | crnn=%.2f | %s", p["action"],
+                             p["plate_text"], p["crnn_confidence"], photo_path or "-")
 
         total_ms = (time.perf_counter() - t0) * 1000
         self.session_processed += 1
@@ -316,6 +347,26 @@ class ALPRSystem:
             except Exception as exc:
                 print(f"[{idx}/{total}] {img_path.name} | ERROR: {exc}")
         return results
+
+    # ------------------------------------------------------------------ #
+    # Evidence photo (SRS Phase 6 — LOG-002, SEC-003)
+    # ------------------------------------------------------------------ #
+    def _save_photo(self, annotated, plate: dict) -> str | None:
+        """Save the annotated full frame as photos/plate_{ts}_{PLATE}.jpg and
+        return its project-relative path for the DB (SRS LOG-002 naming)."""
+        try:
+            import cv2
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]     # ms precision
+            tag = re.sub(r"[^0-9A-Za-z-]", "", plate.get("number") or "") or "UNREAD"
+            path = self.photo_dir / f"plate_{ts}_{tag}.jpg"
+            cv2.imwrite(str(path), annotated)
+            try:
+                return path.relative_to(PROJECT_ROOT).as_posix()
+            except ValueError:
+                return str(path)
+        except Exception as exc:
+            self.logger.error("photo save failed: %s", exc)
+            return None
 
     # ------------------------------------------------------------------ #
     # Health monitoring & alerts (SRS Phase 9 — HLT-001/002/003, PERF-004)
@@ -424,7 +475,8 @@ class ALPRSystem:
         disconnected_since: float | None = None      # start of a stream outage
         try:
             while True:
-                frame = self.camera.get_frame()
+                frame = self.camera.get_frame(self.frame_timeout)
+                capture_ms = self.camera.frame_timestamp_ms     # VID-002
                 if frame is None:
                     if not self.camera.is_connected():
                         # AVAIL-001 / HLT-003: alert on a sustained disconnect,
@@ -466,7 +518,10 @@ class ALPRSystem:
                 fps = 1000.0 / max(np.mean(frame_times[-30:]), 1e-6)
 
                 out_frame = res["frame"]
-                cv2.putText(out_frame, f"FPS: {fps:.1f} | {res['total_ms']:.0f}ms",
+                # VID-002: frame age = now - acquisition timestamp (proves per-frame ts)
+                age_ms = (time.time() * 1000.0 - capture_ms) if capture_ms else 0.0
+                cv2.putText(out_frame,
+                            f"FPS: {fps:.1f} | {res['total_ms']:.0f}ms | age {age_ms:.0f}ms",
                             (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                 cv2.putText(out_frame,
                             f"Allowed:{self.session_allowed} Denied:{self.session_denied}",

@@ -82,8 +82,35 @@ The single most important thing to understand:
   driven live). Result: **16/16 requirements PASS** → `metrics/srs_acceptance.json`.
   (Task 12.1 config-key renaming to SRS Appendix C names still minor-pending; folds
   into Phase 5.)
-- **Phase 10 (dashboard GUI) TODO** — deferred to build interactively with the user.
-- **Phase 5 (live RTSP) TODO** — deferred until a phone stream is available to validate.
+- **Phase 10 (control dashboard) DONE** — `scripts/system/dashboard.py`: OpenCV-native
+  one-screen dashboard (live annotated video + gate banner + FPS/latency/GPU + session
+  counters + recent-events log + clickable MANUAL-OPEN / E-STOP buttons and o/e/q keys).
+  Runs on any source (folder/video/webcam/RTSP). Verified via `--headless N` preview in
+  both normal and E-STOP states (`results/dashboard_preview.png`, `dashboard_estop.png`).
+- **Phase 6 (photo capture + audit) DONE** — every read saves the full annotated
+  frame as `photos/plate_{ts}_{PLATE}.jpg` and persists `photo_path` + `location` in
+  `plate_reads` (LOG-002/SEC-003); structured `logs/alpr.log` via `src/utils/logger.py`
+  (LOG-003). DET-005 10% crop-padding implemented + config-toggleable but **kept at
+  0.0** — padding regresses recognition 70.6%→46.2% (CRNN wants tight crops); intent
+  met by full-frame evidence photos. Logged as **DEV-004**. Verified: 143 photos,
+  photo_path in every row, recognition unchanged at 70.6%.
+- **Phase 8 (admin functions) DONE — as a WEB PANEL, not CLI.**
+  `scripts/system/admin_web.py` (stdlib http.server + jinja2, no new deps): browser UI
+  reachable from PC or phone (`http://<pc-ip>:5000`) to view authorized/blocked plates,
+  add (ADM-001), suspend/reactivate/delete (ADM-002), and search the audit log (ADM-003).
+  Khmer renders natively in the browser. DB gained `set_status()` + `remove_plate()`.
+  Launch via `python main.py admin` (opens browser). Verified end-to-end over HTTP.
+- **Phase 5 (live RTSP) — code done, live validation pending user's phone.**
+  `rtsp_reader.py`: VID-001 reconnect now **10 attempts @ 5 s** (config-driven), VID-002
+  per-frame acquisition timestamp (`frame_timestamp_ms`, `get_frame_ts()`); `run_video`
+  shows frame `age` (now − capture ts). Config gained a `camera:` block + RTSP examples.
+  **User live-validation steps (F1 acceptance):**
+  1. Phone + PC on the same Wi-Fi. Android: install **IP Webcam**, Start server.
+  2. Set `camera_source` in `configs/system_config.yaml` to the stream URL it shows,
+     e.g. `rtsp://<phone-ip>:8080/h264_ulaw.sdp` (or `http://<phone-ip>:8080/video`).
+  3. `python scripts/system/dashboard.py`  (or `run_demo.py` with no `--source`).
+  4. Confirm ≥ 20 FPS, boxes track the plate, `age` stays low; unplug Wi-Fi briefly to
+     see reconnect; run ~2 h for the F1 stability criterion.
 
 ### Metrics so far
 | Model | Metric |
@@ -162,6 +189,11 @@ Target: CER < 15%, word-acc > 70% (SRS REC-001) — **MET** (10.21% / 72.48%).
 ---
 
 ## 8. USEFUL SCRIPTS (all under scripts/<group>/, run from project root)
+- **`main.py` (project root) = the single entry point.** `python main.py` → menu
+  (dashboard / demo / stream test / enroll / view DB / acceptance / set camera).
+  Direct: `python main.py dashboard|demo|stream|enroll|db|accept|camera <url>`.
+- `scripts/system/test_stream.py` — verify a phone/IP-camera stream before going live.
+- `scripts/system/dashboard.py` — live control dashboard (video + gate + controls).
 - `scripts/recognition/crop_numbers.py` — re-crop number lines with number_best.pt
 - `scripts/tools/make_montage.py` + `Read` the montages — bulk label train crops
 - `scripts/tools/import_label_csv.py <csv>` — merge labels into real_labels.csv
