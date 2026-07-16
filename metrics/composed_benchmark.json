@@ -1,0 +1,23 @@
+{
+  "n_frames": 149,
+  "detection_rate": 0.959731543624161,
+  "number_accuracy": 0.6778523489932886,
+  "number_cer": 0.1514543630892678,
+  "number_failures": 42,
+  "province_accuracy": 0.9718,
+  "composed_accuracy": 0.6587369127516779,
+  "composed_kind": "ESTIMATE (no province GT for these frames)",
+  "composed_measured_on": 0,
+  "false_accepts": 0,
+  "false_accept_rate": 0.0,
+  "neighbour_whitelist_size": 137,
+  "gate_sim": {
+    "detected": 143,
+    "exact_open": 100,
+    "low_conf_review": 12,
+    "recovered_review": 17,
+    "other_near_review": 1,
+    "hard_deny": 13,
+    "intruder_false_open": 1
+  }
+}

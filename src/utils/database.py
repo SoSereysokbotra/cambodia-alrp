@@ -117,6 +117,52 @@ class PlateDatabase:
             print(f"[PlateDatabase] is_registered error: {exc}")
             return False
 
+    @staticmethod
+    def _edit_distance(a: str, b: str) -> int:
+        """Levenshtein edit distance (small strings; used by nearest_registered)."""
+        if a == b:
+            return 0
+        if not a:
+            return len(b)
+        if not b:
+            return len(a)
+        prev = list(range(len(b) + 1))
+        for i, ca in enumerate(a, 1):
+            cur = [i]
+            for j, cb in enumerate(b, 1):
+                cur.append(min(prev[j] + 1, cur[j - 1] + 1,
+                               prev[j - 1] + (ca != cb)))
+            prev = cur
+        return prev[-1]
+
+    def nearest_registered(self, plate_text: str,
+                           max_distance: int = 1) -> tuple[str, int] | None:
+        """Closest ACTIVE registered plate within `max_distance` edits, or None.
+
+        SAFETY: this is a *candidate* lookup for the REVIEW_REQUIRED path only —
+        it is deliberately separate from is_registered() (which stays an EXACT
+        match and is the ONLY thing that may open the gate). A near match here
+        must never auto-open; it only flags a suggestion for human review, so a
+        1-character CRNN misread of a legitimate plate is surfaced instead of
+        silently denied. Returns (matched_plate_text, distance).
+        """
+        if not plate_text or max_distance < 1:
+            return None
+        try:
+            best, best_d = None, max_distance + 1
+            for (reg,) in self.conn.execute(
+                "SELECT plate_text FROM registered_plates WHERE status = 'active'"
+            ):
+                if reg == plate_text:
+                    return (reg, 0)          # exact — is_registered handles opening
+                d = self._edit_distance(plate_text, reg)
+                if d < best_d:
+                    best, best_d = reg, d
+            return (best, best_d) if best is not None and best_d <= max_distance else None
+        except sqlite3.Error as exc:
+            print(f"[PlateDatabase] nearest_registered error: {exc}")
+            return None
+
     def suspend_plate(self, plate_text: str) -> bool:
         """Set a plate's status to 'suspended' (SRS ADM-002)."""
         return self.set_status(plate_text, "suspended")

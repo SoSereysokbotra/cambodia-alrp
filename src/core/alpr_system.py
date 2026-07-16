@@ -52,6 +52,14 @@ class ALPRSystem:
         # SRS REC-005: reads below this confidence -> REVIEW_REQUIRED (gate stays shut)
         self.crnn_conf_threshold = float(
             cfg.get("gate", {}).get("crnn_confidence_threshold", 0.70))
+        # ROADMAP 1.2: whitelist-constrained matching. A confident read that is
+        # NOT an exact whitelist hit but is within `match_max_distance` edits of a
+        # registered plate is routed to REVIEW_REQUIRED (a candidate correction) —
+        # it NEVER auto-opens the gate (that stays exact-match only, fail-safe).
+        self.constrained_matching = bool(
+            cfg.get("gate", {}).get("constrained_matching", True))
+        self.match_max_distance = int(
+            cfg.get("gate", {}).get("match_max_distance", 1))
 
         # --- models / db / camera / gate --- #
         self.detector = PlateDetector(_resolve(cfg["yolo_weights"]),
@@ -246,6 +254,14 @@ class ALPRSystem:
             # Stage 3 — DB lookup
             t3 = time.perf_counter()
             is_reg = self.database.is_registered(plate_text)
+            # ROADMAP 1.2: only look for a near match when it isn't an exact hit
+            # and the read is confident — used ONLY to flag a review candidate.
+            suggested = None
+            if (self.constrained_matching and not is_reg
+                    and crnn_conf >= self.crnn_conf_threshold):
+                near = self.database.nearest_registered(plate_text, self.match_max_distance)
+                if near is not None and near[1] > 0:
+                    suggested = near[0]          # (matched_plate, distance>0)
             db_ms = (time.perf_counter() - t3) * 1000
 
             # Stage 4 — gate decision (SRS REC-005 confidence gate + SEC-005 fail-safe)
@@ -261,6 +277,12 @@ class ALPRSystem:
                 self.gate.open_gate(plate_text, self.open_duration)
                 action = "ENTRY_ALLOWED"
                 self.session_allowed += 1
+            elif suggested is not None:
+                # ROADMAP 1.2: confident read one edit from a registered plate —
+                # likely a legit plate misread by a character. Gate STAYS CLOSED;
+                # surface it for a human instead of a silent ENTRY_DENIED.
+                action = "REVIEW_REQUIRED"
+                self.session_review += 1
             else:
                 action = "ENTRY_DENIED"
                 self.session_denied += 1
@@ -275,6 +297,7 @@ class ALPRSystem:
                 "number_confidence": round(float(number_conf_det), 4),
                 "crnn_confidence": round(crnn_conf, 4),
                 "action": action,
+                "suggested_plate": suggested,     # ROADMAP 1.2: review candidate
                 "yolo_ms": yolo_ms,
                 "crnn_ms": crnn_ms,
                 "db_ms": db_ms,
@@ -302,8 +325,9 @@ class ALPRSystem:
                 location=self.location,
                 photo_path=photo_path,
             )
-            self.logger.info("%s | %s | crnn=%.2f | %s", p["action"],
-                             p["plate_text"], p["crnn_confidence"], photo_path or "-")
+            _sugg = f" | did-you-mean={p['suggested_plate']}" if p.get("suggested_plate") else ""
+            self.logger.info("%s | %s | crnn=%.2f | %s%s", p["action"],
+                             p["plate_text"], p["crnn_confidence"], photo_path or "-", _sugg)
 
         total_ms = (time.perf_counter() - t0) * 1000
         self.session_processed += 1

@@ -33,6 +33,11 @@ gate:
   yolo_confidence_threshold: 0.50
   number_confidence_threshold: 0.40  # number-line detector (number_best.pt)
   crnn_confidence_threshold: 0.70   # SRS REC-005: below this -> REVIEW_REQUIRED
+  # ROADMAP 1.2 — whitelist-constrained matching (safe): a confident read within
+  # `match_max_distance` edits of a registered plate (but not an exact hit) is
+  # routed to REVIEW_REQUIRED, NOT opened. Gate auto-open stays exact-match only.
+  constrained_matching: true
+  match_max_distance: 1             # max edit distance for a review candidate
   location: "Main Gate"             # logged with every read (DB location column)
 
 display:
