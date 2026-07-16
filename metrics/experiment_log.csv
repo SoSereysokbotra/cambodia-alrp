@@ -1,0 +1,16 @@
+timestamp,git_commit,component,metric,value,split,notes
+2026-07-17T06:34:51,594aecc,yolo_plate_detector,map50,0.9664,test,[history] best.pt (Plate_v4)
+2026-07-17T06:34:51,594aecc,yolo_number_detector,map50,0.943,test,[history] number_best.pt
+2026-07-17T06:34:51,594aecc,province_classifier,accuracy,0.9718,test,[history] ResNet18 26-class
+2026-07-17T06:34:51,594aecc,crnn,cer,0.9489,real-test,[history] synthetic-only baseline
+2026-07-17T06:34:51,594aecc,crnn,cer,0.2593,real-test,[history] fine-tuned on 143 real
+2026-07-17T06:34:51,594aecc,crnn,cer,0.2032,real-test,[history] fine-tuned on 324 real
+2026-07-17T06:34:51,594aecc,crnn,cer,0.1021,real-test,[history] fine-tuned on 473 real (SRS target met)
+2026-07-17T06:34:51,594aecc,crnn,word_accuracy,0.7248,real-test,[history] fine-tuned on 473 real
+2026-07-17T06:34:51,594aecc,pipeline,number_e2e_accuracy,0.706,real-test,"[history] two-detector, 101/143 (recorded)"
+2026-07-17T06:34:51,594aecc,pipeline,latency_ms,51.0,real,[history] two-detector avg (~19.6 FPS)
+2026-07-17T06:35:05,594aecc,pipeline,number_e2e_accuracy,0.6779,real-test,benchmark_composed.py (n=149)
+2026-07-17T06:35:05,594aecc,pipeline,number_cer,0.1515,real-test,benchmark_composed.py (n=149)
+2026-07-17T06:35:05,594aecc,pipeline,detection_rate,0.9597,real-test,benchmark_composed.py (n=149)
+2026-07-17T06:35:05,594aecc,pipeline,false_accept_rate,0.0,real-test,neighbour harness
+2026-07-17T06:35:05,594aecc,pipeline,consistency_flag_precision,0.4545,real-test,"2.2, 22 flagged"

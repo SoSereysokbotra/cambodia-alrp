@@ -19,5 +19,15 @@
     "other_near_review": 1,
     "hard_deny": 13,
     "intruder_false_open": 1
+  },
+  "consistency_2_2": {
+    "flagged": 22,
+    "flag_on_wrong": 10,
+    "flag_on_correct": 12,
+    "flag_precision": 0.45454545454545453,
+    "reasons": {
+      "weak-number-alignment": 21,
+      "uncertain-province": 1
+    }
   }
 }

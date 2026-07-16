@@ -204,7 +204,40 @@ crops each), rather than adding more "easy" daylight captures.
 **Expected impact:** Directly extends the proven data→CER trend into the
 conditions most likely to occur at a real gate.
 
-### 2.2 Province ↔ number cross-validation
+### 2.2 Province ↔ number cross-validation  ✅ DONE (2026-07-17)
+**Status:** Implemented as a **non-opening** consistency flag. Two signals, both
+config-gated: (a) **weak pairing** — the matched number box's scale-invariant
+overlap with the province box (`align = overlap / smaller-box`) is below
+`gate.number_alignment_min`, i.e. likely mis-paired in a multi-plate frame; and
+(b) **uncertain province** — a Khmer prefix is being composed from a classifier
+below `gate.province_confidence_min`. A confident, non-whitelisted, non-near read
+that trips either signal goes to **REVIEW_REQUIRED** instead of a silent
+`ENTRY_DENIED`. It **never downgrades a confirmed `ENTRY_ALLOWED`** (exact match
+already confirms the province), so it adds no delay for registered cars and no
+false-accept risk. Files: `src/core/alpr_system.py` (`_match_number` now returns
+pairing quality), `configs/system_config.yaml`.
+
+**Tuning (done against the 1.1 benchmark):** the first metric (`overlap/number-width`)
+over-triggered badly — 44 flags at 27% precision — because the number line is
+normally *wider* than the Khmer province line. Switching to the scale-invariant
+`align` metric and threshold **0.20** nearly doubled precision:
+| Metric | Value |
+|--------|-------|
+| Reads flagged → REVIEW | 22/143 |
+| Flag on a WRONG number (catch) | 10 |
+| Flag on a CORRECT number (noise) | 12 |
+| Flag precision | 45.45% |
+| Dominant reason | weak-number-alignment (21), uncertain-province (1) |
+
+**Addresses the 1.2 cross-plate finding:** a number misread as another plate's
+number will usually pair with a *different* province, which 2.2's signals (and the
+composed-text whitelist) help surface. **Honest limitation:** precision is moderate
+and the signal targets province/pairing, so full validation needs province ground
+truth for the test frames (same gap flagged in 1.1). The noise is low-harm — 2.2
+only converts DENYs of *unregistered* reads into REVIEWs; registered cars are
+unaffected. Set `gate.consistency_check: false` to disable.
+
+### 2.2 Province ↔ number cross-validation — original notes
 **Why:** The two branches (province classifier, number CRNN) currently run
 independently with no consistency check. A plate where the province is
 unreadable but the number reads confidently — or vice versa — currently
@@ -233,14 +266,23 @@ pipeline latency (~51ms / 19.6 FPS) has headroom, so this is about
 *portability*, not fixing a current bottleneck.
 **Effort:** Medium. **Impact:** Deployment-readiness, not accuracy. No training.
 
-### 3.2 Lightweight experiment tracking
-Metrics currently live scattered across `results/`, `metrics/`, `runs/`, and
-prose in `HANDOFF.md`. Doesn't need to be W&B/MLflow — even a single append-only
-CSV (`run_id, date, component, metric, value, git_commit`) checked into the
-repo would prevent regressions like the padding issue (DEV-004) from being
-rediscovered by accident.
-**Effort:** Low–medium. **Impact:** Compounding — pays off more with every
-future experiment.
+### 3.2 Lightweight experiment tracking  ✅ DONE (2026-07-17)
+**Status:** Implemented as `scripts/tools/experiment_log.py` — one append-only CSV
+`metrics/experiment_log.csv` (columns: `timestamp, git_commit, component, metric,
+value, split, notes`). No new deps. Usage:
+- `python scripts/tools/experiment_log.py --show` — print the log.
+- `python scripts/tools/experiment_log.py --component crnn --metric cer --value 0.1021 --split real-test --notes "..."` — log one row.
+- `python scripts/tools/experiment_log.py --backfill` — seed the documented history once (idempotent).
+- Importable `log_metric(...)` for scripts; **`benchmark_composed.py` now auto-appends** its headline metrics (number acc, CER, detection rate, FAR, 2.2 precision) with the current commit on every run.
+
+The history was backfilled from `docs/HANDOFF.md` (the CER curve 0.9489 → 0.1021,
+detector mAPs, province acc, latency), so the log opens with the baseline story
+instead of empty. Every future run stamps the commit, so a regression like the
+DET-005 padding one can't be silently rediscovered.
+
+**Original intent (met):** metrics were scattered across `results/`, `metrics/`,
+`runs/`, and prose in `HANDOFF.md`; now there is one diffable, greppable,
+Excel-openable source of truth.
 
 ---
 

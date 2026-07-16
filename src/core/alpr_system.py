@@ -34,6 +34,7 @@ from utils.logger import get_logger                  # noqa: E402
 from crnn_reader import CRNNReader                   # noqa: E402
 
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+_OTHER_CLASS = 25   # province_map.OTHER_CLASS: 'other' (no Khmer prefix composed)
 
 
 def _resolve(path_str: str) -> Path:
@@ -60,6 +61,14 @@ class ALPRSystem:
             cfg.get("gate", {}).get("constrained_matching", True))
         self.match_max_distance = int(
             cfg.get("gate", {}).get("match_max_distance", 1))
+        # ROADMAP 2.2: province<->number consistency check. Flags a confident,
+        # non-whitelisted read to REVIEW when the two branches disagree.
+        self.consistency_check = bool(
+            cfg.get("gate", {}).get("consistency_check", True))
+        self.province_confidence_min = float(
+            cfg.get("gate", {}).get("province_confidence_min", 0.55))
+        self.number_alignment_min = float(
+            cfg.get("gate", {}).get("number_alignment_min", 0.20))
 
         # --- models / db / camera / gate --- #
         self.detector = PlateDetector(_resolve(cfg["yolo_weights"]),
@@ -184,23 +193,31 @@ class ALPRSystem:
         horizontally aligned with it, so we score each candidate by horizontal
         overlap (relative to the number box width), preferring boxes that lie
         below the province box, with detection confidence as a tie-breaker.
-        Returns the best number detection dict, or None if there are none.
+        Returns (best_number_detection, quality) — quality is a dict with the
+        winning pairing's `h_overlap` (0..1) and `below` (1.0/0.6), used by the
+        ROADMAP 2.2 consistency check. Returns (None, None) if there are none.
         """
         if not number_dets:
-            return None
+            return None, None
         px1, _py1, px2, py2 = prov_bbox
         pcy = (_py1 + py2) / 2.0
-        best, best_score = None, -1.0
+        pw = max(1, px2 - px1)
+        best, best_score, best_q = None, -1.0, None
         for nd in number_dets:
             nx1, ny1, nx2, _ny2 = nd["bbox"]
             overlap = max(0, min(px2, nx2) - max(px1, nx1))
             nw = max(1, nx2 - nx1)
-            h_overlap = overlap / nw                     # 0..1 horizontal alignment
+            h_overlap = overlap / nw                     # 0..1 (used for ranking)
             below = 1.0 if ny1 >= pcy else 0.6           # number line is below province
             score = h_overlap * below + float(nd["confidence"]) * 0.05
             if score > best_score:
                 best_score, best = score, nd
-        return best
+                # `align` is scale-invariant (overlap vs the SMALLER box), so a
+                # normally-wider number line isn't wrongly penalised — used by the
+                # ROADMAP 2.2 consistency check to catch true mis-pairings only.
+                best_q = {"h_overlap": h_overlap, "below": below,
+                          "align": overlap / min(pw, nw)}
+        return best, best_q
 
     # ------------------------------------------------------------------ #
     def process_frame(self, frame) -> dict:
@@ -224,11 +241,12 @@ class ALPRSystem:
         plates_result = []
         for det in detections:
             # Pick the NUMBER crop for the CRNN (two-detector flow).
+            match_q = None                          # ROADMAP 2.2 pairing quality
             if self.assume_crop:
                 number_crop = det["crop"]          # whole pre-cropped plate
                 number_conf_det = det["confidence"]
             elif self.number_detector is not None:
-                num_det = self._match_number(det["bbox"], number_dets)
+                num_det, match_q = self._match_number(det["bbox"], number_dets)
                 number_crop = num_det["crop"] if num_det else None
                 number_conf_det = num_det["confidence"] if num_det else 0.0
             else:
@@ -250,6 +268,22 @@ class ALPRSystem:
             else:
                 plate_text = number
             crnn_ms = (time.perf_counter() - t2) * 1000
+
+            # ROADMAP 2.2 — province <-> number cross-validation. The two branches
+            # run independently; flag internal inconsistencies so a confident-but-
+            # -unreliable composed read is sent to a human instead of silently
+            # (mis)acted on. Signals: (a) the number box is poorly aligned under
+            # the province box (likely mis-paired in a multi-plate frame), or
+            # (b) a province PREFIX is being composed from an uncertain classifier.
+            consistency_reasons = []
+            if self.consistency_check:
+                if (match_q is not None
+                        and match_q.get("align", 1.0) < self.number_alignment_min):
+                    consistency_reasons.append("weak-number-alignment")
+                if (prov_id is not None and prov_id != _OTHER_CLASS
+                        and prov_conf is not None
+                        and prov_conf < self.province_confidence_min):
+                    consistency_reasons.append("uncertain-province")
 
             # Stage 3 — DB lookup
             t3 = time.perf_counter()
@@ -283,6 +317,13 @@ class ALPRSystem:
                 # surface it for a human instead of a silent ENTRY_DENIED.
                 action = "REVIEW_REQUIRED"
                 self.session_review += 1
+            elif consistency_reasons:
+                # ROADMAP 2.2: confident, not a whitelist match, but the province
+                # and number branches are internally inconsistent -> the composed
+                # read is unreliable. Flag for review rather than a silent DENY.
+                # (Never downgrades a confirmed ENTRY_ALLOWED above.)
+                action = "REVIEW_REQUIRED"
+                self.session_review += 1
             else:
                 action = "ENTRY_DENIED"
                 self.session_denied += 1
@@ -291,6 +332,7 @@ class ALPRSystem:
                 "plate_text": plate_text,
                 "number": number,
                 "is_registered": is_reg,
+                "consistency_reasons": consistency_reasons,   # ROADMAP 2.2
                 "province_id": prov_id,
                 "province_confidence": (round(prov_conf, 4) if prov_conf is not None else None),
                 "confidence": det["confidence"],

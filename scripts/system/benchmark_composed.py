@@ -217,6 +217,8 @@ def main() -> None:
                 "pred_prov": pl.get("province_id"),
                 "plate_text": pl.get("plate_text", ""),
                 "crnn_conf": pl.get("crnn_confidence", 0.0),
+                "action": pl.get("action", ""),
+                "consistency_reasons": pl.get("consistency_reasons", []),
             })
             if i % 25 == 0:
                 print(f"  processed {i}/{len(rows)} ...")
@@ -319,6 +321,20 @@ def main() -> None:
                 intruder_false_open += 1
         nd = max(1, len(det_recs))
 
+        # ---- 2.2 consistency-flag measurement ---------------------------- #
+        # The pipeline ran with an EMPTY whitelist, so every confident read that
+        # 2.2 flags shows up as a REVIEW it converted from a would-be DENY. Cross-
+        # tab the flag against number correctness: a flag on a WRONG read is a good
+        # catch; a flag on a CORRECT read is an over-trigger (lost throughput).
+        flagged = [r for r in det_recs if r.get("consistency_reasons")]
+        flag_wrong = sum(1 for r in flagged if r["pred_number"] != r["gt_number"])
+        flag_right = len(flagged) - flag_wrong
+        reason_counts: dict[str, int] = {}
+        for r in flagged:
+            for why in r["consistency_reasons"]:
+                reason_counts[why] = reason_counts.get(why, 0) + 1
+        flag_precision = flag_wrong / max(1, len(flagged))
+
         # ---- report ------------------------------------------------------ #
         def pct(x): return f"{x*100:.2f}%"
         print("\n" + "=" * 62)
@@ -353,6 +369,17 @@ def main() -> None:
               f"{'PASS (confidence gate blocks it)' if intruder_false_open == 0 else '*** pre-existing exact-match risk — see note ***'}")
         print("   note: 1.2 constrained matching NEVER auto-opens — recovered reads")
         print("         become REVIEW_REQUIRED, so it adds ZERO false-accept risk.")
+        print("-" * 62)
+        print(" 2.2 CONSISTENCY FLAGS (province<->number), whitelist empty")
+        print(f"   reads flagged -> REVIEW       : {len(flagged)}/{len(det_recs)}")
+        print(f"     on a WRONG number (catch)   : {flag_wrong}")
+        print(f"     on a CORRECT number (noise) : {flag_right}")
+        print(f"   flag precision (wrong|flagged): {pct(flag_precision)}")
+        if reason_counts:
+            print(f"   reasons                      : "
+                  + ", ".join(f"{k}={v}" for k, v in sorted(reason_counts.items())))
+        print("   note: 2.2 never downgrades a confirmed ALLOW; it only converts")
+        print("         suspect DENYs into REVIEWs. Full tuning needs province GT.")
         print("=" * 62)
 
         METRICS_OUT.parent.mkdir(parents=True, exist_ok=True)
@@ -378,8 +405,35 @@ def main() -> None:
                 "hard_deny": hard_deny,
                 "intruder_false_open": intruder_false_open,
             },
+            "consistency_2_2": {
+                "flagged": len(flagged),
+                "flag_on_wrong": flag_wrong,
+                "flag_on_correct": flag_right,
+                "flag_precision": flag_precision,
+                "reasons": reason_counts,
+            },
         }, indent=2), encoding="utf-8")
         print(f"\n[bench] wrote {METRICS_OUT.relative_to(PROJECT_ROOT)}")
+
+        # ROADMAP 3.2: append headline metrics to the experiment log (with commit)
+        try:
+            sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "tools"))
+            from experiment_log import log_metric
+            note = f"benchmark_composed.py (n={n})"
+            log_metric("pipeline", "number_e2e_accuracy", round(num_acc, 4),
+                       split="real-test", notes=note)
+            log_metric("pipeline", "number_cer", round(cer, 4),
+                       split="real-test", notes=note)
+            log_metric("pipeline", "detection_rate", round(det_rate, 4),
+                       split="real-test", notes=note)
+            log_metric("pipeline", "false_accept_rate", round(far, 4),
+                       split="real-test", notes="neighbour harness")
+            log_metric("pipeline", "consistency_flag_precision",
+                       round(flag_precision, 4), split="real-test",
+                       notes=f"2.2, {len(flagged)} flagged")
+            print("[bench] appended headline metrics to metrics/experiment_log.csv")
+        except Exception as exc:
+            print(f"[bench] (experiment-log append skipped: {exc})")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

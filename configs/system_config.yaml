@@ -38,6 +38,14 @@ gate:
   # routed to REVIEW_REQUIRED, NOT opened. Gate auto-open stays exact-match only.
   constrained_matching: true
   match_max_distance: 1             # max edit distance for a review candidate
+  # ROADMAP 2.2 — province<->number cross-validation. A confident, non-whitelisted
+  # read is sent to REVIEW (not silently DENIED) when the branches disagree:
+  #   * number box poorly aligned with the province box (scale-invariant overlap
+  #     `align` below min -> likely mis-paired in a multi-plate frame), or
+  #   * a province prefix composed from a classifier below province_confidence_min.
+  consistency_check: true
+  province_confidence_min: 0.55     # below this, an added province prefix is suspect
+  number_alignment_min: 0.20        # min align (overlap/smaller-box) to trust pairing
   location: "Main Gate"             # logged with every read (DB location column)
 
 display:
