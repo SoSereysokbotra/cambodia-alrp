@@ -95,6 +95,40 @@ PAGE = Template("""<!doctype html>
     </form>
   </div>
 
+  <div class="card">
+    <h2 style="margin-top:0">🆕 Authorize from recent reads</h2>
+    <div class="sub">Cars the camera read but that aren't authorized yet. Click
+      <b>Authorize</b> to add the <b>exact</b> text the camera read — no typing, no
+      typos. Check it matches the plate before authorizing.</div>
+    <table><tr><th>Plate (as read)</th><th>Result</th><th>When</th><th>Conf</th><th></th></tr>
+    {% for c in candidates %}
+      <tr><td class="plate">{{ c.plate_text }}</td>
+        <td class="{{ c.cls }}">{{ c.action }}</td>
+        <td class="sub">{{ c.timestamp }}</td>
+        <td>{{ c.crnn_confidence }}</td>
+        <td><form class="inline" method="post" action="/authorize">
+          <input type="hidden" name="plate_text" value="{{ c.plate_text }}">
+          <button class="b-add">Authorize</button></form></td></tr>
+    {% else %}<tr><td colspan="5" class="sub">no un-authorized reads yet</td></tr>{% endfor %}
+    </table>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0">🅿️ Currently inside ({{ inside|length }})</h2>
+    <div class="sub">Cars parked right now (parking mode). They clear automatically
+      on exit — use <b>Clear</b> only if a car left without being scanned.</div>
+    <table><tr><th>Plate</th><th>Entered</th><th></th></tr>
+    {% for c in inside %}
+      <tr><td class="plate">{{ c.plate_text }}</td>
+        <td class="sub">{{ c.entry_time }}</td>
+        <td><form class="inline" method="post" action="/checkout"
+              onsubmit="return confirm('Clear {{ c.plate_text }} from inside?')">
+          <input type="hidden" name="plate_text" value="{{ c.plate_text }}">
+          <button class="b-susp">Clear</button></form></td></tr>
+    {% else %}<tr><td colspan="3" class="sub">lot is empty</td></tr>{% endfor %}
+    </table>
+  </div>
+
   <h2>✅ Authorized ({{ n_auth }})</h2>
   <table><tr><th>Plate</th><th>Owner</th><th>Vehicle</th><th></th></tr>
   {% for p in authorized %}
@@ -167,11 +201,31 @@ def render(db: PlateDatabase, q: str = "", action_f: str = "",
     reads = db.search_reads(plate=q or None, action=action_f or None, limit=25)
     for r in reads:
         r["cls"] = _ACT_CLS.get(r.get("action"), "act")
+
+    # One-click enrolment: recent reads that were NOT let in and are not already
+    # registered. Authorising copies the EXACT text the camera read (no typing).
+    registered_texts = {p.get("plate_text") for p in plates}
+    candidates, seen = [], set()
+    for r in db.get_recent_reads(limit=80):
+        dp = (r.get("detected_plate") or "").strip()
+        if (not dp or dp in registered_texts or dp in seen
+                or dp == "MANUAL_OVERRIDE" or dp.endswith("(unreadable)")):
+            continue
+        if r.get("action") not in ("ENTRY_DENIED", "REVIEW_REQUIRED"):
+            continue
+        seen.add(dp)
+        candidates.append({"plate_text": dp, "action": r.get("action"),
+                           "timestamp": r.get("timestamp"),
+                           "crnn_confidence": r.get("crnn_confidence"),
+                           "cls": _ACT_CLS.get(r.get("action"), "act")})
+        if len(candidates) >= 10:
+            break
+
     html = PAGE.render(
         authorized=authorized, blocked=blocked,
         n_auth=len(authorized), n_blocked=len(blocked), n_total=len(plates),
-        reads=reads, q=q, action_f=action_f, actions=ACTIONS,
-        msg=msg, msg_kind=msg_kind)
+        reads=reads, candidates=candidates, inside=db.active_sessions(),
+        q=q, action_f=action_f, actions=ACTIONS, msg=msg, msg_kind=msg_kind)
     return html.encode("utf-8")
 
 
@@ -217,6 +271,11 @@ class Handler(BaseHTTPRequestHandler):
                                   "added via web admin")
                 self._redirect(f"registered {plate}" if ok else f"{plate} already exists",
                                "ok" if ok else "err")
+            elif path == "/authorize":
+                # one-click enrol of the EXACT text the camera read
+                ok = db.add_plate(plate, "Unknown", "car", "authorized from recent read")
+                self._redirect(f"authorized {plate}" if ok else f"{plate} already authorized",
+                               "ok" if ok else "err")
             elif path == "/suspend":
                 ok = db.set_status(plate, "suspended")
                 self._redirect(f"suspended {plate}" if ok else "not found",
@@ -228,6 +287,11 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/delete":
                 ok = db.remove_plate(plate)
                 self._redirect(f"deleted {plate}" if ok else "not found",
+                               "ok" if ok else "err")
+            elif path == "/checkout":
+                # manually clear a car from "inside" (missed exit scan)
+                ok = db.close_parking_session(plate)
+                self._redirect(f"cleared {plate} from inside" if ok else "not inside",
                                "ok" if ok else "err")
             else:
                 self._redirect("unknown action", "err")

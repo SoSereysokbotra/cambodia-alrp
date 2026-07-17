@@ -83,8 +83,10 @@ class CRNN(nn.Module):
         b, c, h, w = conv.size()
         if h != 1:
             # Safety: collapse any residual height to 1 (keeps this robust to
-            # img_h=64 or 32). Averages the remaining vertical band.
-            conv = F.adaptive_avg_pool2d(conv, (1, w))
+            # img_h=64 or 32). Averaging the vertical band via mean(dim=2) is
+            # mathematically identical to adaptive_avg_pool2d(., (1, w)) but is
+            # ONNX-exportable (adaptive pooling with a dynamic size is not).
+            conv = conv.mean(dim=2, keepdim=True)
         conv = conv.squeeze(2)                  # (b, c, w)
         conv = conv.permute(2, 0, 1)            # (w, b, c) = (seq, batch, feat)
 

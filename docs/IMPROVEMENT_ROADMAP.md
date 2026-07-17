@@ -258,13 +258,27 @@ the 1.1 benchmark to avoid over-triggering). **No training needed.**
 
 ## Phase 3 — Medium impact, worth doing eventually
 
-### 3.1 Model export & quantization (ONNX / TensorRT)
-Not urgent for a laptop demo, but if this ever runs on cheaper edge hardware
-(the stated long-term deployment target), exporting the four models and
-quantizing where accuracy allows will matter for latency and memory. Current
-pipeline latency (~51ms / 19.6 FPS) has headroom, so this is about
-*portability*, not fixing a current bottleneck.
-**Effort:** Medium. **Impact:** Deployment-readiness, not accuracy. No training.
+### 3.1 Model export & quantization (ONNX / TensorRT)  ✅ DONE — ONNX (2026-07-17)
+**Status:** All four models export to ONNX via `scripts/tools/export_onnx.py`, each
+verified against its PyTorch original:
+| Model | ONNX | Parity (max|torch−onnx|) |
+|-------|------|--------------------------|
+| YOLO plate detector | `models/onnx/best.onnx` | ORT runs OK (Ultralytics layout) |
+| YOLO number detector | `models/onnx/number_best.onnx` | ORT runs OK |
+| CRNN number reader | `models/onnx/crnn_finetuned.onnx` | 1.14e-05 |
+| Province classifier | `models/onnx/province_classifier.onnx` | 1.19e-06 |
+
+**One model change (behaviour-preserving):** the CRNN's height-collapse used
+`adaptive_avg_pool2d(., (1, w))`, which ONNX can't export with a dynamic size.
+Replaced with `conv.mean(dim=2, keepdim=True)` — **mathematically identical**.
+Verified the live pipeline is unchanged (number acc still 67.79%, CER 15.15%,
+FAR 0) after the swap. New deps: `onnx`, `onnxruntime` (CPU) added to the venv.
+
+**Not done (deferred):** TensorRT/quantization and swapping the runtime to ONNX
+Runtime. Export is the enabling step; actually running the pipeline on ORT is a
+separate task worth doing only when targeting non-laptop edge hardware. Current
+latency (~51 ms / 19.6 FPS) has headroom, so there's no bottleneck to fix now.
+**Impact:** Deployment portability, not accuracy. No training.
 
 ### 3.2 Lightweight experiment tracking  ✅ DONE (2026-07-17)
 **Status:** Implemented as `scripts/tools/experiment_log.py` — one append-only CSV

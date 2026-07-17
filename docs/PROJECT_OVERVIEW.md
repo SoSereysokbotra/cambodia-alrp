@@ -103,6 +103,31 @@ suppressed below the 0.70 gate. See `src/recognition/crnn_reader.py`.
 
 ---
 
+### Two gate modes (config-selectable)
+The gate decision runs in one of two modes, set by `gate.parking_mode`:
+
+- **Whitelist mode (default, `parking_mode: false`)** — secure access control. The
+  gate opens only for a plate that exactly matches the `registered_plates`
+  whitelist *and* reads confidently (fail-safe default-deny). Plates are enrolled
+  manually (admin panel / enroll / read). Includes the constrained-matching (1.2)
+  and province↔number consistency (2.2) review paths.
+- **Parking mode (`parking_mode: true`)** — session tracking with clear-on-exit.
+  A confident read that is **not** currently inside is an **ENTRY** (gate opens, a
+  `parking_sessions` row is created); a read that **is** inside is an **EXIT** (gate
+  opens, the row is **deleted** — the plate is cleared from the system). Only cars
+  parked *right now* are stored, so storage stays flat. A single camera infers
+  entry/exit from session presence (`parking_camera_role: auto`), or two cameras can
+  force `entry`/`exit`. Exit matching is fuzzy (tolerates a 1-char misread); stale
+  sessions (missed exits) auto-expire after `parking_stale_hours`.
+  `python main.py inside` lists cars currently inside. Two entry policies:
+  - `parking_require_permit: false` (**open parking**) — the gate opens for *every*
+    car on entry. Not access control.
+  - `parking_require_permit: true` (**permit parking, hybrid**) — ENTRY is allowed
+    only for a whitelisted plate ("permit"), but the inside-session is still deleted
+    on exit (the permit is kept). Grant permits with the admin panel's **[Authorize]**
+    button; a car is approved once and never re-typed. Combines access control with
+    flat storage.
+
 ## 4. Technology stack
 
 **Language / DL:** Python 3.10, PyTorch 2.5.1 + CUDA 12.1, Ultralytics (YOLOv10),

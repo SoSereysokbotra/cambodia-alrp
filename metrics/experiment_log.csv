@@ -14,3 +14,22 @@ timestamp,git_commit,component,metric,value,split,notes
 2026-07-17T06:35:05,594aecc,pipeline,detection_rate,0.9597,real-test,benchmark_composed.py (n=149)
 2026-07-17T06:35:05,594aecc,pipeline,false_accept_rate,0.0,real-test,neighbour harness
 2026-07-17T06:35:05,594aecc,pipeline,consistency_flag_precision,0.4545,real-test,"2.2, 22 flagged"
+2026-07-17T06:46:07,9d6a872,best,onnx_parity_max_abs_diff,0.00e+00,export,3.1 -> best.onnx
+2026-07-17T06:46:08,9d6a872,number_best,onnx_parity_max_abs_diff,0.00e+00,export,3.1 -> number_best.onnx
+2026-07-17T06:46:11,9d6a872,province_classifier,onnx_parity_max_abs_diff,1.19e-06,export,3.1 -> province_classifier.onnx
+2026-07-17T06:47:28,9d6a872,crnn,onnx_parity_max_abs_diff,1.14e-05,export,3.1 -> crnn_finetuned.onnx
+2026-07-17T06:47:55,9d6a872,pipeline,number_e2e_accuracy,0.6779,real-test,benchmark_composed.py (n=149)
+2026-07-17T06:47:55,9d6a872,pipeline,number_cer,0.1515,real-test,benchmark_composed.py (n=149)
+2026-07-17T06:47:55,9d6a872,pipeline,detection_rate,0.9597,real-test,benchmark_composed.py (n=149)
+2026-07-17T06:47:55,9d6a872,pipeline,false_accept_rate,0.0,real-test,neighbour harness
+2026-07-17T06:47:55,9d6a872,pipeline,consistency_flag_precision,0.4545,real-test,"2.2, 22 flagged"
+2026-07-17T07:33:04,9d6a872,pipeline,number_e2e_accuracy,0.6779,real-test,benchmark_composed.py (n=149)
+2026-07-17T07:33:04,9d6a872,pipeline,number_cer,0.1515,real-test,benchmark_composed.py (n=149)
+2026-07-17T07:33:04,9d6a872,pipeline,detection_rate,0.9597,real-test,benchmark_composed.py (n=149)
+2026-07-17T07:33:04,9d6a872,pipeline,false_accept_rate,0.0,real-test,neighbour harness
+2026-07-17T07:33:04,9d6a872,pipeline,consistency_flag_precision,0.4545,real-test,"2.2, 22 flagged"
+2026-07-17T08:52:18,9d6a872,pipeline,number_e2e_accuracy,0.85,real-test,benchmark_composed.py (n=40)
+2026-07-17T08:52:18,9d6a872,pipeline,number_cer,0.0669,real-test,benchmark_composed.py (n=40)
+2026-07-17T08:52:18,9d6a872,pipeline,detection_rate,0.975,real-test,benchmark_composed.py (n=40)
+2026-07-17T08:52:18,9d6a872,pipeline,false_accept_rate,0.0,real-test,neighbour harness
+2026-07-17T08:52:18,9d6a872,pipeline,consistency_flag_precision,0.2,real-test,"2.2, 10 flagged"

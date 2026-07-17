@@ -14,6 +14,7 @@ Or run a task directly:
     python main.py enroll        # whitelist a plate (type the text yourself)
     python main.py read <img>    # read an image -> exact plate text -> offer to enroll
     python main.py db            # view registered plates + recent reads
+    python main.py inside        # parking mode: list cars currently inside
     python main.py admin         # web panel to manage the whitelist (browser)
     python main.py accept        # SRS acceptance test (16 checks)
     python main.py camera <url>  # set camera_source (phone URL, 0=webcam, or a folder)
@@ -153,6 +154,20 @@ def launch_admin() -> None:
     _run("admin_web.py")
 
 
+def view_inside() -> None:
+    """Parking mode: list the cars currently INSIDE (open sessions)."""
+    db = _open_db()
+    rows = db.active_sessions()
+    print("\n== Cars currently INSIDE (parking mode) ==")
+    if not rows:
+        print("  (none — the lot is empty)")
+    for r in rows:
+        print(f"  {r.get('plate_text'):<26} in since {r.get('entry_time','')}")
+    print(f"\n  {len(rows)} car(s) inside. A car is cleared automatically when it "
+          "is read on the way out.")
+    db.close()
+
+
 def view_db() -> None:
     db = _open_db()
     plates = db.get_all_registered()
@@ -252,6 +267,8 @@ def main() -> None:
         enroll()
     elif cmd == "db":
         view_db()
+    elif cmd == "inside":
+        view_inside()
     elif cmd == "admin":
         launch_admin()
     elif cmd == "read":

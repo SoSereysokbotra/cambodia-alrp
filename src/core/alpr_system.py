@@ -69,6 +69,15 @@ class ALPRSystem:
             cfg.get("gate", {}).get("province_confidence_min", 0.55))
         self.number_alignment_min = float(
             cfg.get("gate", {}).get("number_alignment_min", 0.20))
+        # Parking mode (open parking): entry records a session, exit clears it.
+        gate_cfg = cfg.get("gate", {})
+        self.parking_mode = bool(gate_cfg.get("parking_mode", False))
+        self.parking_camera_role = str(gate_cfg.get("parking_camera_role", "auto")).lower()
+        self.parking_exit_fuzzy = bool(gate_cfg.get("parking_exit_fuzzy", True))
+        self.parking_stale_hours = float(gate_cfg.get("parking_stale_hours", 12))
+        # Permit parking (hybrid): entry requires a whitelist "permit" but the
+        # inside-session is still cleared on exit (permit kept).
+        self.parking_require_permit = bool(gate_cfg.get("parking_require_permit", False))
 
         # --- models / db / camera / gate --- #
         self.detector = PlateDetector(_resolve(cfg["yolo_weights"]),
@@ -115,6 +124,12 @@ class ALPRSystem:
                 print(f"[ALPRSystem] province classifier unavailable: {exc}")
 
         self.database = PlateDatabase(_resolve(cfg["db_path"]))
+        if self.parking_mode:
+            n_stale = self.database.expire_stale_sessions(self.parking_stale_hours)
+            inside = self.database.count_inside()
+            print(f"[ALPRSystem] PARKING MODE on (role={self.parking_camera_role}) "
+                  f"| {inside} car(s) inside"
+                  + (f", cleared {n_stale} stale" if n_stale else ""))
         cam_cfg = cfg.get("camera", {}) or {}       # SRS Phase 5 (VID-001/004)
         self.frame_timeout = float(cam_cfg.get("frame_timeout_sec", 2.0))
         self.camera = RTSPReader(
@@ -149,6 +164,14 @@ class ALPRSystem:
         self.crop_pad = float(cfg.get("detection", {}).get("crop_padding", 0.10))  # DET-005
         self.location = cfg.get("gate", {}).get("location", "Main Gate")
         self.logger = get_logger(self.log_dir)                                     # LOG-003
+
+        # --- live read de-duplication (one row per car, kept at the best read) --- #
+        log_cfg = cfg.get("logging", {}) or {}
+        self.dedup_enabled = bool(log_cfg.get("dedup_enabled", True))
+        self.dedup_gap_sec = float(log_cfg.get("dedup_gap_sec", 3.0))
+        self.dedup_merge_edits = int(log_cfg.get("dedup_merge_edits", 2))
+        self._live_dedup = False        # turned on by run_video (not offline/demo)
+        self._visit = None              # current car's aggregated read {id,best_conf,...}
         self.logger.info("ALPRSystem initialised (crop_pad=%.2f, photos=%s)",
                          self.crop_pad, self._photo_rel)
 
@@ -220,6 +243,44 @@ class ALPRSystem:
         return best, best_q
 
     # ------------------------------------------------------------------ #
+    def _parking_gate(self, plate_text: str) -> tuple[str, str | None]:
+        """Parking decision for one confident read. Returns (action, event).
+
+        Single camera ("auto"): a plate already INSIDE is an EXIT (open + delete
+        the session -> plate cleared); otherwise it's an ENTRY (open + record).
+        Two cameras: force role="entry" or "exit". Exit is fuzzy-matched (a plate
+        the CRNN misread by one char still clears the right car). The gate always
+        opens on exit — a parking gate never traps a car.
+
+        Permit mode (`parking_require_permit`): ENTRY is allowed only for a plate
+        in the whitelist; an un-permitted car is DENIED and no session is created.
+        Exit still just clears the inside-session (the permit is untouched).
+        """
+        role = self.parking_camera_role
+        match = plate_text if self.database.is_inside(plate_text) else None
+        if match is None and self.parking_exit_fuzzy:
+            near = self.database.nearest_inside(plate_text, 1)
+            if near is not None and near[1] > 0:
+                match = near[0]
+
+        treat_as_exit = (match is not None) if role == "auto" else (role == "exit")
+        if treat_as_exit:
+            target = match or plate_text
+            self.gate.open_gate(target, self.open_duration)
+            cleared = self.database.close_parking_session(target)
+            self.session_allowed += 1
+            return "ENTRY_ALLOWED", ("EXIT" if cleared else "EXIT_UNKNOWN")
+
+        # ENTRY. In permit mode, only a whitelisted plate may enter.
+        if self.parking_require_permit and not self.database.is_registered(plate_text):
+            self.session_denied += 1
+            return "ENTRY_DENIED", None
+        self.gate.open_gate(plate_text, self.open_duration)
+        self.database.open_parking_session(plate_text)
+        self.session_allowed += 1
+        return "ENTRY_ALLOWED", "ENTRY"
+
+    # ------------------------------------------------------------------ #
     def process_frame(self, frame) -> dict:
         t0 = time.perf_counter()
 
@@ -285,20 +346,23 @@ class ALPRSystem:
                         and prov_conf < self.province_confidence_min):
                     consistency_reasons.append("uncertain-province")
 
-            # Stage 3 — DB lookup
+            # Stage 3 — DB lookup (whitelist mode only; parking mode uses sessions)
             t3 = time.perf_counter()
-            is_reg = self.database.is_registered(plate_text)
-            # ROADMAP 1.2: only look for a near match when it isn't an exact hit
-            # and the read is confident — used ONLY to flag a review candidate.
+            is_reg = False
             suggested = None
-            if (self.constrained_matching and not is_reg
-                    and crnn_conf >= self.crnn_conf_threshold):
-                near = self.database.nearest_registered(plate_text, self.match_max_distance)
-                if near is not None and near[1] > 0:
-                    suggested = near[0]          # (matched_plate, distance>0)
+            if not self.parking_mode:
+                is_reg = self.database.is_registered(plate_text)
+                # ROADMAP 1.2: only look for a near match when it isn't an exact
+                # hit and the read is confident — used ONLY to flag a review candidate.
+                if (self.constrained_matching and not is_reg
+                        and crnn_conf >= self.crnn_conf_threshold):
+                    near = self.database.nearest_registered(plate_text, self.match_max_distance)
+                    if near is not None and near[1] > 0:
+                        suggested = near[0]          # (matched_plate, distance>0)
             db_ms = (time.perf_counter() - t3) * 1000
 
             # Stage 4 — gate decision (SRS REC-005 confidence gate + SEC-005 fail-safe)
+            parking_event = None
             if self.estop_active:
                 # MAN-002: emergency stop overrides everything — gate stays closed.
                 action = "REVIEW_REQUIRED"
@@ -307,6 +371,9 @@ class ALPRSystem:
                 # low confidence -> never open; flag for human review
                 action = "REVIEW_REQUIRED"
                 self.session_review += 1
+            elif self.parking_mode:
+                # OPEN PARKING: entry records a session, exit clears it. No whitelist.
+                action, parking_event = self._parking_gate(plate_text)
             elif is_reg:
                 self.gate.open_gate(plate_text, self.open_duration)
                 action = "ENTRY_ALLOWED"
@@ -333,6 +400,7 @@ class ALPRSystem:
                 "number": number,
                 "is_registered": is_reg,
                 "consistency_reasons": consistency_reasons,   # ROADMAP 2.2
+                "parking_event": parking_event,               # ENTRY / EXIT (parking mode)
                 "province_id": prov_id,
                 "province_confidence": (round(prov_conf, 4) if prov_conf is not None else None),
                 "confidence": det["confidence"],
@@ -352,24 +420,17 @@ class ALPRSystem:
         except Exception:
             annotated = frame
 
-        # Phase 6.1 (LOG-002/SEC-003): save one evidence photo of the full
-        # annotated frame per read, then log each read WITH its photo_path.
-        photo_path = self._save_photo(annotated, plates_result[0]) if plates_result else None
-        for p in plates_result:
-            self.database.log_read(
-                detected_plate=p["plate_text"],
-                yolo_confidence=p["confidence"],
-                crnn_confidence=p["crnn_confidence"],
-                action=p["action"],
-                plate_text=(p["plate_text"]
-                            if (p["is_registered"] and p["action"] == "ENTRY_ALLOWED")
-                            else None),
-                location=self.location,
-                photo_path=photo_path,
-            )
-            _sugg = f" | did-you-mean={p['suggested_plate']}" if p.get("suggested_plate") else ""
-            self.logger.info("%s | %s | crnn=%.2f | %s%s", p["action"],
-                             p["plate_text"], p["crnn_confidence"], photo_path or "-", _sugg)
+        # Phase 6.1 (LOG-002/SEC-003): persist an evidence photo + audit row.
+        # LIVE (run_video): de-duplicate — one row per car, upgraded to its best
+        #   read, so a plate held in view for seconds is a SINGLE clean entry.
+        # OFFLINE (demo/benchmark): every frame is a distinct sample -> log each.
+        if self._live_dedup and self.dedup_enabled:
+            if plates_result:
+                self._dedup_persist(plates_result[0], annotated, time.time())
+        else:
+            photo_path = self._save_photo(annotated, plates_result[0]) if plates_result else None
+            for p in plates_result:
+                self._log_one(p, photo_path)
 
         total_ms = (time.perf_counter() - t0) * 1000
         self.session_processed += 1
@@ -433,6 +494,65 @@ class ALPRSystem:
         except Exception as exc:
             self.logger.error("photo save failed: %s", exc)
             return None
+
+    # ------------------------------------------------------------------ #
+    # Audit persistence + live de-duplication
+    # ------------------------------------------------------------------ #
+    def _audit_fields(self, p: dict) -> tuple[str, str | None]:
+        """(location tag, plate_text-to-store) shared by log + update."""
+        loc = (f"{self.location} | {p['parking_event']}"
+               if p.get("parking_event") else self.location)
+        matched = ((p["is_registered"] or p.get("parking_event"))
+                   and p["action"] == "ENTRY_ALLOWED")
+        return loc, (p["plate_text"] if matched else None)
+
+    def _log_one(self, p: dict, photo_path: str | None) -> int | None:
+        """Insert one audit row for a read; returns its id."""
+        loc, matched_text = self._audit_fields(p)
+        rid = self.database.log_read(
+            detected_plate=p["plate_text"], yolo_confidence=p["confidence"],
+            crnn_confidence=p["crnn_confidence"], action=p["action"],
+            plate_text=matched_text, location=loc, photo_path=photo_path)
+        _sugg = f" | did-you-mean={p['suggested_plate']}" if p.get("suggested_plate") else ""
+        _evt = f" | {p['parking_event']}" if p.get("parking_event") else ""
+        self.logger.info("%s%s | %s | crnn=%.2f | %s%s", p["action"], _evt,
+                         p["plate_text"], p["crnn_confidence"], photo_path or "-", _sugg)
+        return rid
+
+    def _dedup_persist(self, p: dict, annotated, now: float) -> None:
+        """Live: keep ONE audit row per car (per visit), upgraded to the best read.
+
+        A read whose text is within `dedup_merge_edits` of the current visit and
+        seen within `dedup_gap_sec` is the SAME car: it does not add a new row —
+        it only replaces the existing row if it's more confident. A different plate
+        (or a gap in time) starts a new visit / row. This turns the per-frame flood
+        into a single, correct entry that staff can act on.
+        """
+        plate, conf = p["plate_text"], p["crnn_confidence"]
+        v = self._visit
+        same = (v is not None and (now - v["last_time"]) <= self.dedup_gap_sec
+                and self.database._edit_distance(plate, v["best_plate"])
+                <= self.dedup_merge_edits)
+        if not same:
+            photo = self._save_photo(annotated, p)
+            rid = self._log_one(p, photo)
+            self._visit = {"id": rid, "best_plate": plate, "best_conf": conf,
+                           "last_time": now, "photo": photo}
+        else:
+            v["last_time"] = now
+            if conf > v["best_conf"] and v["id"] is not None:
+                # better read of the SAME car -> upgrade its single row + photo
+                photo = self._save_photo(annotated, p)
+                loc, matched_text = self._audit_fields(p)
+                self.database.update_read(v["id"], detected_plate=plate,
+                                          crnn_confidence=conf, action=p["action"],
+                                          plate_text=matched_text, photo_path=photo)
+                if v.get("photo"):
+                    try:
+                        (PROJECT_ROOT / v["photo"]).unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                v.update(best_plate=plate, best_conf=conf, photo=photo)
 
     # ------------------------------------------------------------------ #
     # Health monitoring & alerts (SRS Phase 9 — HLT-001/002/003, PERF-004)
@@ -535,6 +655,7 @@ class ALPRSystem:
 
     def run_video(self, show_display: bool = True, save_video: bool = False) -> None:
         import cv2
+        self._live_dedup = True          # collapse repeated reads of one car into one row
         self.camera.start()
         frame_times: list[float] = []
         writer = None

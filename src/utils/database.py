@@ -67,6 +67,19 @@ class PlateDatabase:
             )
             """
         )
+        # Parking mode (open parking): the set of cars CURRENTLY INSIDE. A row is
+        # created on entry and DELETED on exit, so storage only ever holds cars
+        # that are parked right now — nothing accumulates for cars that left.
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS parking_sessions (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                plate_text  TEXT UNIQUE NOT NULL,
+                entry_time  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                entry_photo TEXT
+            )
+            """
+        )
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS system_metrics (
@@ -163,6 +176,93 @@ class PlateDatabase:
             print(f"[PlateDatabase] nearest_registered error: {exc}")
             return None
 
+    # ------------------------------------------------------------------ #
+    # Parking mode — "cars currently inside" (created on entry, deleted on exit)
+    # ------------------------------------------------------------------ #
+    def open_parking_session(self, plate_text: str,
+                             entry_photo: str | None = None) -> bool:
+        """Record a car as INSIDE (entry). No-op if already inside (re-read)."""
+        try:
+            self.conn.execute(
+                "INSERT OR IGNORE INTO parking_sessions (plate_text, entry_photo) "
+                "VALUES (?, ?)", (plate_text, entry_photo))
+            self.conn.commit()
+            return True
+        except sqlite3.Error as exc:
+            print(f"[PlateDatabase] open_parking_session error: {exc}")
+            return False
+
+    def is_inside(self, plate_text: str) -> bool:
+        """True if this plate currently has an open parking session."""
+        try:
+            row = self.conn.execute(
+                "SELECT 1 FROM parking_sessions WHERE plate_text = ? LIMIT 1",
+                (plate_text,)).fetchone()
+            return row is not None
+        except sqlite3.Error:
+            return False
+
+    def nearest_inside(self, plate_text: str,
+                       max_distance: int = 1) -> tuple[str, int] | None:
+        """Closest currently-inside plate within `max_distance` edits, or None.
+        Lets an exit match a car whose plate the CRNN misread by a character."""
+        if not plate_text or max_distance < 1:
+            return None
+        try:
+            best, best_d = None, max_distance + 1
+            for (p,) in self.conn.execute("SELECT plate_text FROM parking_sessions"):
+                if p == plate_text:
+                    return (p, 0)
+                d = self._edit_distance(plate_text, p)
+                if d < best_d:
+                    best, best_d = p, d
+            return (best, best_d) if best is not None and best_d <= max_distance else None
+        except sqlite3.Error:
+            return None
+
+    def close_parking_session(self, plate_text: str) -> bool:
+        """Remove a car's session (exit). Returns True if a row was deleted."""
+        try:
+            cur = self.conn.execute(
+                "DELETE FROM parking_sessions WHERE plate_text = ?", (plate_text,))
+            self.conn.commit()
+            return cur.rowcount > 0
+        except sqlite3.Error as exc:
+            print(f"[PlateDatabase] close_parking_session error: {exc}")
+            return False
+
+    def active_sessions(self) -> list[dict]:
+        """All cars currently inside (most recent entry first)."""
+        try:
+            rows = self.conn.execute(
+                "SELECT plate_text, entry_time, entry_photo FROM parking_sessions "
+                "ORDER BY entry_time DESC").fetchall()
+            return [{"plate_text": r[0], "entry_time": r[1], "entry_photo": r[2]}
+                    for r in rows]
+        except sqlite3.Error:
+            return []
+
+    def count_inside(self) -> int:
+        try:
+            return self.conn.execute(
+                "SELECT COUNT(*) FROM parking_sessions").fetchone()[0]
+        except sqlite3.Error:
+            return 0
+
+    def expire_stale_sessions(self, hours: float) -> int:
+        """Delete sessions older than `hours` (cars whose exit read was missed),
+        so orphaned rows don't linger. Returns how many were removed."""
+        if hours <= 0:
+            return 0
+        try:
+            cur = self.conn.execute(
+                "DELETE FROM parking_sessions WHERE entry_time < "
+                "datetime('now', ?)", (f"-{float(hours)} hours",))
+            self.conn.commit()
+            return cur.rowcount
+        except sqlite3.Error:
+            return 0
+
     def suspend_plate(self, plate_text: str) -> bool:
         """Set a plate's status to 'suspended' (SRS ADM-002)."""
         return self.set_status(plate_text, "suspended")
@@ -209,7 +309,7 @@ class PlateDatabase:
         if action not in VALID_ACTIONS:
             action = "ERROR"
         try:
-            self.conn.execute(
+            cur = self.conn.execute(
                 "INSERT INTO plate_reads "
                 "(plate_text, detected_plate, yolo_confidence, crnn_confidence, "
                 " location, action, photo_path) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -217,9 +317,28 @@ class PlateDatabase:
                  _clamp(crnn_confidence), location, action, photo_path),
             )
             self.conn.commit()
-            return True
+            return cur.lastrowid       # row id (so a live read can be upgraded)
         except sqlite3.Error as exc:
             print(f"[PlateDatabase] log_read error: {exc}")
+            return None
+
+    def update_read(self, read_id: int, detected_plate: str, crnn_confidence: float,
+                    action: str, plate_text: str | None = None,
+                    photo_path: str | None = None) -> bool:
+        """Overwrite an existing audit row (used by live de-duplication to keep a
+        single row per car and upgrade it to the best read seen during the visit)."""
+        if action not in VALID_ACTIONS:
+            action = "ERROR"
+        try:
+            self.conn.execute(
+                "UPDATE plate_reads SET detected_plate = ?, crnn_confidence = ?, "
+                "action = ?, plate_text = ?, photo_path = ? WHERE id = ?",
+                (detected_plate, _clamp(crnn_confidence), action, plate_text,
+                 photo_path, read_id))
+            self.conn.commit()
+            return True
+        except sqlite3.Error as exc:
+            print(f"[PlateDatabase] update_read error: {exc}")
             return False
 
     def log_metrics(self, fps: float, avg_latency_ms: float,

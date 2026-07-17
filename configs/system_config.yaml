@@ -46,6 +46,21 @@ gate:
   consistency_check: true
   province_confidence_min: 0.55     # below this, an added province prefix is suspect
   number_alignment_min: 0.20        # min align (overlap/smaller-box) to trust pairing
+  # --- Parking mode (open parking: any car in, matched & CLEARED on exit) ---
+  # When true, the gate STOPS using the whitelist. Instead a confident read that
+  # is NOT currently inside is treated as an ENTRY (gate opens, session recorded);
+  # a read that IS inside is treated as an EXIT (gate opens, session DELETED, so
+  # the plate is cleared from the system). Only cars parked right now are stored.
+  # SECURITY NOTE: this opens the gate for EVERY car on entry — no whitelist.
+  parking_mode: false
+  parking_camera_role: "auto"       # auto (single cam: toggle by presence) | entry | exit
+  parking_exit_fuzzy: true          # let an exit match a plate misread by 1 char
+  parking_stale_hours: 12           # auto-clear sessions older than this (missed exits)
+  # Permit parking (hybrid, option 3): when true, ENTRY is allowed only for a plate
+  # in the whitelist (a "permit"), but the "currently inside" session is still
+  # DELETED on exit (the permit is kept). Grant permits with the admin panel's
+  # [Authorize] button. When false, entry is open to any car (pure open parking).
+  parking_require_permit: false
   location: "Main Gate"             # logged with every read (DB location column)
 
 display:
@@ -71,6 +86,13 @@ detection:
 logging:
   level: "INFO"
   log_dir: "logs/"
+  # Live de-duplication: at ~20 FPS one car in view for a few seconds would log
+  # dozens of rows (many mis-reads), burying the correct one. Instead, collapse
+  # all reads of one car into ONE audit row and keep upgrading it to the highest-
+  # confidence reading during the visit — so staff see a single, correct entry.
+  dedup_enabled: true
+  dedup_gap_sec: 3.0            # a plate not seen for this long counts as a NEW visit
+  dedup_merge_edits: 2         # reads within this many char-edits = the same car
 
 # SRS Phase 9 — health monitoring & alerts (HLT-001/002/003, PERF-004, AVAIL-001)
 health:
