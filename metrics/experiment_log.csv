@@ -33,3 +33,15 @@ timestamp,git_commit,component,metric,value,split,notes
 2026-07-17T08:52:18,9d6a872,pipeline,detection_rate,0.975,real-test,benchmark_composed.py (n=40)
 2026-07-17T08:52:18,9d6a872,pipeline,false_accept_rate,0.0,real-test,neighbour harness
 2026-07-17T08:52:18,9d6a872,pipeline,consistency_flag_precision,0.2,real-test,"2.2, 10 flagged"
+2026-07-22T17:28:18,dd108fc,pipeline,number_e2e_accuracy,0.6779,real-test,benchmark_composed.py (n=149)
+2026-07-22T17:28:18,dd108fc,pipeline,number_cer,0.1515,real-test,benchmark_composed.py (n=149)
+2026-07-22T17:28:18,dd108fc,pipeline,detection_rate,0.9597,real-test,benchmark_composed.py (n=149)
+2026-07-22T17:28:18,dd108fc,pipeline,false_accept_rate,0.0,real-test,neighbour harness
+2026-07-22T17:28:18,dd108fc,pipeline,consistency_flag_precision,0.4545,real-test,"2.2, 22 flagged"
+2026-07-22T17:30:10,dd108fc,pipeline,number_e2e_accuracy,0.6779,real-test,benchmark_composed.py (n=149)
+2026-07-22T17:30:10,dd108fc,pipeline,number_cer,0.1515,real-test,benchmark_composed.py (n=149)
+2026-07-22T17:30:11,dd108fc,pipeline,detection_rate,0.9597,real-test,benchmark_composed.py (n=149)
+2026-07-22T17:30:11,dd108fc,pipeline,composed_exact_match,0.6871,real-test,"measured on 147 frames, 2 unverifiable excluded"
+2026-07-22T17:30:11,dd108fc,pipeline,province_accuracy,0.9524,real-test,"measured, n=147"
+2026-07-22T17:30:11,dd108fc,pipeline,false_accept_rate,0.0,real-test,neighbour harness
+2026-07-22T17:30:11,dd108fc,pipeline,consistency_flag_precision,0.4545,real-test,"2.2, 22 flagged"

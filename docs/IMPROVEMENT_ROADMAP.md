@@ -5,6 +5,10 @@
 > do, in what order, and why.
 >
 > Last updated: 2026-07-17.
+>
+> **Successor:** Phase 1–3 below are done. Work that comes after them lives in
+> `docs/IMPROVEMENT_PLAN_V2.md`, which is organised as sequential phases with a
+> measurement gate between each one. Start there.
 
 ---
 

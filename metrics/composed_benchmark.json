@@ -1,32 +1,33 @@
 {
-  "n_frames": 40,
-  "detection_rate": 0.975,
-  "number_accuracy": 0.85,
-  "number_cer": 0.06691449814126393,
-  "number_failures": 5,
-  "province_accuracy": 0.9718,
-  "composed_accuracy": 0.8260299999999999,
-  "composed_kind": "ESTIMATE (no province GT for these frames)",
-  "composed_measured_on": 0,
+  "n_frames": 149,
+  "detection_rate": 0.959731543624161,
+  "number_accuracy": 0.6778523489932886,
+  "number_cer": 0.1514543630892678,
+  "number_failures": 42,
+  "province_accuracy": 0.9523809523809523,
+  "composed_accuracy": 0.6870748299319728,
+  "composed_kind": "measured",
+  "composed_measured_on": 147,
   "false_accepts": 0,
   "false_accept_rate": 0.0,
-  "neighbour_whitelist_size": 39,
+  "neighbour_whitelist_size": 137,
   "gate_sim": {
-    "detected": 39,
-    "exact_open": 33,
-    "low_conf_review": 1,
-    "recovered_review": 3,
+    "detected": 143,
+    "exact_open": 100,
+    "low_conf_review": 12,
+    "recovered_review": 17,
     "other_near_review": 1,
-    "hard_deny": 1,
+    "hard_deny": 13,
     "intruder_false_open": 1
   },
   "consistency_2_2": {
-    "flagged": 10,
-    "flag_on_wrong": 2,
-    "flag_on_correct": 8,
-    "flag_precision": 0.2,
+    "flagged": 22,
+    "flag_on_wrong": 10,
+    "flag_on_correct": 12,
+    "flag_precision": 0.45454545454545453,
     "reasons": {
-      "weak-number-alignment": 10
+      "weak-number-alignment": 21,
+      "uncertain-province": 1
     }
   }
 }

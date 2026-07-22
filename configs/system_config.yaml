@@ -3,7 +3,7 @@
 # All paths are relative to the project root.
 # =====================================================================
 
-camera_source: "http://10.1.64.129:8080/video"   # webcam=0, rtsp url, video, or folder
+camera_source: "http://10.45.245.88:8080/video"   # webcam=0, rtsp url, video, or folder
 # SRS Phase 5 — live smartphone RTSP input (VID-001..004). Point camera_source at a
 # phone stream, e.g. Android "IP Webcam": rtsp://<phone-ip>:8080/h264_ulaw.sdp
 #   or MJPEG over http: http://<phone-ip>:8080/video ; iOS: use Iriun / Larix.

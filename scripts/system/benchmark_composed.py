@@ -122,19 +122,29 @@ def load_test_rows(limit: int | None) -> list[dict]:
     return rows
 
 
-def load_province_gt(path: Path | None) -> dict[str, int]:
-    """Optional province ground truth: {image_filename: province_class}."""
+def load_province_gt(path: Path | None) -> tuple[dict[str, int], int]:
+    """Optional province ground truth: ({image_filename: province_class}, n_skipped).
+
+    Rows whose `note` starts with UNVERIFIABLE are SKIPPED, not trusted: these are
+    frames a human could not read the province from (too low-resolution, or the
+    pre-fill classified a different plate in a multi-plate frame). Scoring against
+    a label nobody could verify would silently corrupt the headline metric, so they
+    are excluded from the measured composed accuracy and reported separately.
+    """
     if not path or not Path(path).exists():
-        return {}
-    gt = {}
+        return {}, 0
+    gt, skipped = {}, 0
     with open(path, encoding="utf-8") as f:
         for r in csv.DictReader(f):
             key = Path(r.get("image") or r.get("image_path") or "").name
+            if (r.get("note") or "").strip().upper().startswith("UNVERIFIABLE"):
+                skipped += 1
+                continue
             try:
                 gt[key] = int(r["province_class"])
             except (KeyError, ValueError):
                 continue
-    return gt
+    return gt, skipped
 
 
 # --------------------------------------------------------------------------- #
@@ -184,7 +194,8 @@ def main() -> None:
         print("[X] no test rows found — check data/crnn_crops/real_labels.csv "
               "and data/annotated/test/images/")
         sys.exit(1)
-    prov_gt = load_province_gt(Path(args.province_gt) if args.province_gt else None)
+    prov_gt, prov_skipped = load_province_gt(
+        Path(args.province_gt) if args.province_gt else None)
 
     import cv2
     tmp = Path(tempfile.mkdtemp(prefix="alpr_bench_"))
@@ -350,6 +361,9 @@ def main() -> None:
         print("-" * 62)
         print(f" province acc             : {pct(prov_acc)}")
         print(f" COMPOSED exact-match     : {pct(composed_acc)}   [{composed_kind}]")
+        if prov_gt:
+            print(f"   measured on            : {composed_total} frames"
+                  + (f"  ({prov_skipped} excluded as UNVERIFIABLE)" if prov_skipped else ""))
         if not prov_gt:
             print("   -> to MEASURE this, pass --province-gt <csv> with province")
             print("      labels for the test frames (columns: image,province_class)")
@@ -426,6 +440,16 @@ def main() -> None:
                        split="real-test", notes=note)
             log_metric("pipeline", "detection_rate", round(det_rate, 4),
                        split="real-test", notes=note)
+            # the roadmap-V2 headline metric: only logged when actually MEASURED
+            # against province ground truth, never the independence estimate.
+            if prov_gt:
+                log_metric("pipeline", "composed_exact_match", round(composed_acc, 4),
+                           split="real-test",
+                           notes=f"measured on {composed_total} frames"
+                                 + (f", {prov_skipped} unverifiable excluded"
+                                    if prov_skipped else ""))
+                log_metric("pipeline", "province_accuracy", round(prov_acc, 4),
+                           split="real-test", notes=f"measured, n={composed_total}")
             log_metric("pipeline", "false_accept_rate", round(far, 4),
                        split="real-test", notes="neighbour harness")
             log_metric("pipeline", "consistency_flag_precision",
