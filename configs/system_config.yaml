@@ -38,6 +38,22 @@ gate:
   # routed to REVIEW_REQUIRED, NOT opened. Gate auto-open stays exact-match only.
   constrained_matching: true
   match_max_distance: 1             # max edit distance for a review candidate
+  # PLAN_V2 Phase 1 — plate-format validation (level 1: REJECT only).
+  # A real Cambodian number is D L-DDDD / D-DDDD / DLL-DDDD (98.6% of 622 real
+  # labels) or a CAMBODIA-series vanity plate. Measured on plates.db, 726 of 5952
+  # CONFIDENT reads (12.2%) had a shape no plate can have. When true, such a read
+  # gets confidence 0 -> REVIEW_REQUIRED instead of being treated as confident.
+  # Only ever LOWERS a confidence, so it cannot create a false accept.
+  # ON since 2026-07-23: measured on the 149-frame test set it converts 8 silent
+  # ENTRY_DENIEDs into REVIEWs and costs ZERO correct auto-opens (100 -> 100).
+  format_validation: true
+  # PLAN_V2 Phase 2 — how per-character confidences reduce to one number.
+  #   mean      : legacy, average over non-blank timesteps (hides one bad char)
+  #   min       : the weakest character — one wrong char breaks an exact match
+  #   geometric : exp(mean(log p)), between the two
+  # min <= mean always, so switching can only LOWER confidences (fewer auto-opens,
+  # no new false-accept risk) — but re-tune crnn_confidence_threshold after.
+  confidence_mode: "mean"
   # ROADMAP 2.2 — province<->number cross-validation. A confident, non-whitelisted
   # read is sent to REVIEW (not silently DENIED) when the branches disagree:
   #   * number box poorly aligned with the province box (scale-invariant overlap

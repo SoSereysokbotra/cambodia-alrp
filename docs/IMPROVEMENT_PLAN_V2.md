@@ -83,8 +83,8 @@ impossible format — this is the same population as the benchmark's
 | Phase | Name | Effort | New data? | Retrain? | Unlocks |
 |-------|------|--------|-----------|----------|---------|
 | **0** | Restore the instrument ✅ **DONE 2026-07-22** | ~30 min | No | No | Every later measurement |
-| **1** | Plate-format validation | Low | No | No | Kills the dominant failure mode |
-| **2** | Confidence recalibration | Low | No | No | Makes the REC-005 gate mean something |
+| **1** | Plate-format validation ✅ **DONE 2026-07-23** | Low | No | No | Kills the dominant failure mode |
+| **2** | Confidence recalibration ✅ **DONE 2026-07-23 — hypothesis refuted, default kept** | Low | No | No | Makes the REC-005 gate mean something |
 | **3** | Visit-level benchmark | Medium | No | No | Makes Phase 4 measurable |
 | **4** | Multi-frame read fusion | Medium | No | No | Biggest training-free accuracy gain |
 | **5** | Active-learning harvest | Medium | Yes (mined) | **Yes** | Extends the proven CER curve |
@@ -277,13 +277,82 @@ gate:
 
 Default **false** so `main` behaviour is unchanged until measured.
 
-### Gate — do not start Phase 2 until
-- [ ] Benchmark re-run at n=149 with `format_validation: true`
-- [ ] `false_accept_rate` still 0.00%
-- [ ] `number_failures.length-wrong` has dropped (the target this phase exists for)
-- [ ] Number e2e accuracy has **not** regressed — if it has, the grammar is too
-      tight; widen the pattern table, don't disable the feature
-- [ ] Result logged to `metrics/experiment_log.csv` with a note naming this phase
+### ✅ DONE (2026-07-23) — level 1 shipped, level 2 rejected on evidence
+
+Implemented as `src/recognition/plate_format.py` (grammar + self-check), wired into
+`CRNNReader._infer` behind `gate.format_validation`, now **`true`** by default.
+`benchmark_composed.py` gained `--format-validation on|off` and `--dump` so the A/B
+is repeatable without editing the committed config.
+
+**Grammar coverage — the "is it too tight?" check, run before shipping:**
+
+| Set | Accepted |
+|-----|----------|
+| 622 ground-truth labels | **619 (99.52%)** |
+| rejected | `6667`, `-7495`, `10-1152` — all three are known **labelling artefacts** (plate partly out of frame, so the label is a fragment), not grammar gaps |
+| 5,952 confident live reads | 5,226 legal / **726 impossible (12.2%)** |
+
+The vanity rule earns its place: 6 real CAMBODIA-series plates (`COVI19`,
+`HENGHENG`, `HYWAZA9`, `ELDC865`, `SELA GTR`) would otherwise be pushed to REVIEW,
+and since every impossible pattern observed is digit-led, allowing vanity costs
+**zero** detection power.
+
+**A/B on the 149-frame test set (`--format-validation off` vs `on`):**
+
+| Metric | OFF | ON | Δ |
+|--------|-----|----|----|
+| Number e2e accuracy | 67.79% | 67.79% | — |
+| Composed exact-match | 68.71% | 68.71% | — |
+| **False-accept rate** | **0.00%** | **0.00%** | — ✅ |
+| confident auto-open (exact) | 100 | **100** | **0 — no correct open lost** |
+| low-confidence → REVIEW | 12 | 25 | +13 |
+| 1.2 recovered DENY→REVIEW | 17 | 12 | −5 |
+| **still hard DENY** | **13** | **5** | **−8** |
+| intruder false auto-open | 1 | 1 | — |
+
+**The win: 8 confidently-wrong reads that were being silently `ENTRY_DENIED` are
+now `REVIEW_REQUIRED`, at zero cost to correct auto-opens.** For a gate, a wrong
+denial is a stranded driver; a review is a human glance.
+
+Per-frame analysis confirms the mechanism: the grammar catches **23 of the 42 wrong
+reads (55%)**, and rejects exactly **1** correct read — `6667`, one of the three
+labelling artefacts, which was already below the confidence gate, so it cost nothing
+at the gate.
+
+**Known minor regression (safety-neutral):** validation runs before the ROADMAP 1.2
+near-match logic, so 5 reads that used to reach REVIEW *with* a `suggested_plate`
+("did-you-mean") now reach REVIEW as low-confidence *without* one. Same gate outcome
+(closed) and same destination (a human), but slightly less context for the reviewer.
+Fixable by computing the suggestion even for format-rejected reads; deferred as
+low-value.
+
+### Level 2 (repair) — evaluated and NOT shipped
+
+`normalise()` exists and is unit-tested, but is deliberately **not** wired into any
+gate path. Measured on the 42 wrong reads, dash-insertion repair would change only
+**2** strings: `27389 → 2-7389` (correct) and `---7 → -7` (still wrong). **Net +1
+frame out of 149 (+0.67 pp), against the risk of inventing a plate string.**
+
+The plan's fuller level 2 — a grammar-constrained CTC beam search — has a ceiling of
+the 23 invalid-format wrong reads (~15 pp) but carries exactly the risk the plan
+flagged: forcing a read into a legal shape can manufacture a *confident wrong plate*.
+**Recommendation: defer it behind Phase 4.** Multi-frame voting attacks the same 23
+length-wrong reads by aggregating real evidence across frames rather than guessing
+within one frame — strictly safer for the same target. Revisit level 2 only if
+Phase 4 leaves those 23 unresolved.
+
+### Gate — PASSED (with one criterion corrected)
+- [x] Benchmark re-run at n=149 with `format_validation: true`
+- [x] `false_accept_rate` still 0.00%
+- [x] Number e2e accuracy has **not** regressed (67.79% → 67.79%)
+- [x] Result logged to `metrics/experiment_log.csv`
+- [x] ~~`number_failures.length-wrong` has dropped~~ — **this criterion was
+      mis-specified when the plan was written.** Level 1 only changes *confidence*,
+      never the decoded string, so it cannot move `length-wrong` (still 23) by
+      construction. That is a **level-2 (repair) criterion**, and it is the metric
+      Phase 4 should be judged on. The correct level-1 criterion — and the one that
+      passed — is *"wrong reads diverted from silent DENY to REVIEW, at no cost to
+      correct auto-opens"*: **8 diverted, 0 lost.**
 
 ---
 
@@ -327,13 +396,81 @@ gate:
   crnn_confidence_threshold: 0.70   # re-tune after switching mode
 ```
 
-### Gate — do not start Phase 3 until
-- [ ] Threshold sweep table recorded
-- [ ] `false_accept_rate` 0.00% at the chosen threshold
-- [ ] Correct auto-opens ≥ the Phase 1 number (this phase should improve the
-      *separation*, not cost throughput — if it costs throughput, the threshold
-      is wrong, not the metric)
-- [ ] Per-character confidences visible in the dashboard
+### ✅ DONE (2026-07-23) — hypothesis REFUTED, default unchanged
+
+**The Phase 2 hypothesis was wrong, and the measurement says so clearly.** All three
+statistics are implemented and switchable (`gate.confidence_mode`), but the default
+stays **`mean`**, because `min` is *worse* and no alternative beats it by more than
+noise.
+
+**Separability (AUC = P(confidence of a correct read > confidence of a wrong read)),
+n_correct=101, n_wrong=42, Hanley–McNeil SE:**
+
+| Mode | format OFF | format ON |
+|------|-----------|-----------|
+| **mean** (legacy) | 0.8191 ± 0.0349 | 0.8455 ± 0.0320 |
+| **min** (the hypothesis) | **0.7930** ± 0.0375 | 0.8471 ± 0.0318 |
+| geometric | 0.8309 ± 0.0336 | 0.8545 ± 0.0309 |
+
+1. **`min` is *worse* than `mean` on the raw signal** (0.7930 vs 0.8191). Taking the
+   minimum over ~7 characters is noisy: one unlucky low-probability timestep on an
+   otherwise-correct read drags the whole score down, and the mean averages exactly
+   that noise out. The hypothesis is not merely unsupported, it is backwards.
+2. **Every difference is within noise.** `geometric − mean` = +0.0090 against an SE of
+   ±0.031 — about 0.25 SE. Changing a shipped default on that would be chasing noise,
+   which is the thing the experiment log exists to prevent.
+3. **Phase 1 improved separability for every mode** (+0.026 for mean). That is an
+   independent second confirmation that Phase 1 was worth shipping.
+
+**Threshold sweep** (detected frames, at each threshold: correct auto-opens / false
+opens / review / deny). It shows `min` needs its threshold re-tuned from 0.70 to
+~0.20–0.30 just to *match* `mean` — and then it is exactly equivalent:
+
+| Mode @ threshold | open_ok | false open | review | deny |
+|---|---|---|---|---|
+| mean @ 0.70 | 100 | 1 | 37 | 5 |
+| min @ 0.70 | **63** | 1 | 76 | 3 |
+| min @ 0.30 | 100 | 1 | 37 | 5 |
+| geometric @ 0.70 | 100 | 1 | 38 | 4 |
+
+### Why no confidence statistic can fix the remaining false open
+
+The one intruder false-open is `3E-8990` read for ground truth `3A-8990`. Its
+per-character confidences:
+
+```
+ 3      E      -      8      9      9      0
+0.764  0.9985  0.9994 0.9993 0.9996 0.9996 0.9993
+  ^weakest  ^THE WRONG CHARACTER
+```
+
+**The model is 99.85% confident in the character it got wrong**, while the weakest
+character (`3`, 0.76) is correct. This is not an uncertainty problem — it is a
+*wrong-but-certain* problem, and no aggregate or per-character confidence can
+separate it. Only evidence from outside the single frame can.
+
+**This is the strongest evidence yet for the Phase 4 ordering**, and it explains why
+Phase 2 had to be measured before Phase 4 rather than assumed.
+
+### What Phase 2 did deliver
+- **Per-character confidences** (`char_confidences`, `weakest_char` in the
+  `process_frame` result) via `CRNNReader.read_detailed()` — `read()` is unchanged,
+  so no caller broke.
+- **Tuning infrastructure:** `--confidence-mode`, `--threshold` on the benchmark.
+- Two negative results recorded so nobody re-runs this experiment.
+
+**Deliberately NOT done — dashboard "weakest character" highlight.** The plan called
+for it, but the evidence above shows the weakest-character pointer aims at the
+*correct* character while the wrong one scores 0.999. Shipping it as a prominent
+review hint would actively mislead an operator. The data stays available in the
+result dict for the audit trail and admin panel; the OpenCV overlay is dropped on
+purpose, not overlooked.
+
+### Gate — PASSED (as a decision to keep the default)
+- [x] Threshold sweep table recorded
+- [x] `false_accept_rate` 0.00% at the chosen threshold
+- [x] Correct auto-opens ≥ Phase 1 (100 = 100, default unchanged)
+- [x] ~~Per-character confidences visible in the dashboard~~ — data-layer only; see above
 
 ---
 

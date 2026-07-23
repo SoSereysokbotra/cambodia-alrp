@@ -150,13 +150,19 @@ def load_province_gt(path: Path | None) -> tuple[dict[str, int], int]:
 # --------------------------------------------------------------------------- #
 # isolated ALPRSystem (temp DB + temp photo/output dir)
 # --------------------------------------------------------------------------- #
-def make_isolated_system(tmp: Path):
+def make_isolated_system(tmp: Path, gate_overrides: dict | None = None):
     """Instantiate ALPRSystem against a temp config so the real plates.db and
-    photos/ are never written to. Returns the ALPRSystem."""
+    photos/ are never written to. Returns the ALPRSystem.
+
+    `gate_overrides` patches keys under `gate:` for this run only, so a feature
+    can be A/B'd without editing the committed config.
+    """
     import yaml
     from core.alpr_system import ALPRSystem
 
     cfg = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
+    if gate_overrides:
+        cfg.setdefault("gate", {}).update(gate_overrides)
     cfg["db_path"] = str(tmp / "bench.db")
     cfg.setdefault("output", {})
     cfg["output"]["photo_dir"] = str(tmp / "photos")
@@ -186,6 +192,15 @@ def main() -> None:
     ap.add_argument("--province-gt", type=str, default=None,
                     help="CSV of province ground truth (columns: image,province_class)")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--format-validation", choices=["on", "off"], default=None,
+                    help="PLAN_V2 Phase 1: override gate.format_validation for this run")
+    ap.add_argument("--dump", type=str, default=None,
+                    help="write per-frame records to this JSON (for offline failure analysis)")
+    ap.add_argument("--confidence-mode", choices=["mean", "min", "geometric"],
+                    default=None,
+                    help="PLAN_V2 Phase 2: override gate.confidence_mode for this run")
+    ap.add_argument("--threshold", type=float, default=None,
+                    help="override gate.crnn_confidence_threshold for this run")
     args = ap.parse_args()
     random.seed(args.seed)
 
@@ -203,7 +218,17 @@ def main() -> None:
     print("[bench] loading models (first run takes a few seconds)...\n")
 
     try:
-        system = make_isolated_system(tmp)
+        overrides: dict = {}
+        if args.format_validation:
+            overrides["format_validation"] = args.format_validation == "on"
+        if args.confidence_mode:
+            overrides["confidence_mode"] = args.confidence_mode
+        if args.threshold is not None:
+            overrides["crnn_confidence_threshold"] = args.threshold
+        overrides = overrides or None
+        if overrides:
+            print(f"[bench] overrides: {overrides}")
+        system = make_isolated_system(tmp, overrides)
         conf_threshold = system.crnn_conf_threshold      # REC-005 gate (0.70)
         from recognition.province_map import compose_plate
 
@@ -396,6 +421,16 @@ def main() -> None:
         print("         suspect DENYs into REVIEWs. Full tuning needs province GT.")
         print("=" * 62)
 
+        if args.dump:
+            dump_path = Path(args.dump)
+            dump_path.parent.mkdir(parents=True, exist_ok=True)
+            # `default=str` because the not-detected records carry the source
+            # image Path, which json can't serialise.
+            dump_path.write_text(
+                json.dumps(records, indent=2, ensure_ascii=False, default=str),
+                encoding="utf-8")
+            print(f"[bench] dumped {len(records)} per-frame records -> {dump_path}")
+
         METRICS_OUT.parent.mkdir(parents=True, exist_ok=True)
         METRICS_OUT.write_text(json.dumps({
             "n_frames": n,
@@ -433,7 +468,9 @@ def main() -> None:
         try:
             sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "tools"))
             from experiment_log import log_metric
-            note = f"benchmark_composed.py (n={n})"
+            note = (f"benchmark_composed.py (n={n})"
+                    + (f", format_validation={args.format_validation}"
+                       if args.format_validation else ""))
             log_metric("pipeline", "number_e2e_accuracy", round(num_acc, 4),
                        split="real-test", notes=note)
             log_metric("pipeline", "number_cer", round(cer, 4),

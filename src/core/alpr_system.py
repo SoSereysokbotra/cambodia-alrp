@@ -83,8 +83,17 @@ class ALPRSystem:
         self.detector = PlateDetector(_resolve(cfg["yolo_weights"]),
                                       conf=cfg.get("gate", {}).get(
                                           "yolo_confidence_threshold", 0.5))
+        # PLAN_V2 Phase 1: format validation is decided at the reader, because an
+        # impossible shape invalidates the READ itself, before any gate logic.
+        self.format_validation = bool(
+            cfg.get("gate", {}).get("format_validation", False))
+        # PLAN_V2 Phase 2: how the per-character confidences reduce to one number.
+        self.confidence_mode = str(
+            cfg.get("gate", {}).get("confidence_mode", "mean")).lower()
         self.reader = CRNNReader(_resolve(cfg["crnn_weights"]),
-                                 _resolve(cfg["charset_path"]))
+                                 _resolve(cfg["charset_path"]),
+                                 format_validation=self.format_validation,
+                                 confidence_mode=self.confidence_mode)
 
         # Two-detector flow: best.pt (self.detector) finds the Khmer PROVINCE
         # line (fed to the province classifier); number_best.pt finds the NUMBER
@@ -317,9 +326,12 @@ class ALPRSystem:
             # Stage 2 — CRNN reads the number (returns text + confidence, REC-004)
             t2 = time.perf_counter()
             if number_crop is not None and getattr(number_crop, "size", 0):
-                number, crnn_conf = self.reader.read(number_crop)
+                # Phase 2: keep the per-character confidences so a reviewer can be
+                # pointed at the doubtful character, not just a single number.
+                number, crnn_conf, char_confs = self.reader.read_detailed(number_crop)
             else:
-                number, crnn_conf = "", 0.0        # no number line found
+                number, crnn_conf, char_confs = "", 0.0, []   # no number line found
+            weakest = self.reader.weakest_char(number, char_confs)
             number = number or "(unreadable)"
             # Phase 3 — classify province and compose "provinceKhmer number"
             prov_id = prov_conf = None
@@ -406,6 +418,10 @@ class ALPRSystem:
                 "confidence": det["confidence"],
                 "number_confidence": round(float(number_conf_det), 4),
                 "crnn_confidence": round(crnn_conf, 4),
+                "char_confidences": [round(c, 4) for c in char_confs],   # Phase 2
+                "weakest_char": ({"char": weakest[0], "index": weakest[1],
+                                  "confidence": round(weakest[2], 4)}
+                                 if weakest else None),
                 "action": action,
                 "suggested_plate": suggested,     # ROADMAP 1.2: review candidate
                 "yolo_ms": yolo_ms,

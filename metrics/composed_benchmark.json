@@ -14,10 +14,10 @@
   "gate_sim": {
     "detected": 143,
     "exact_open": 100,
-    "low_conf_review": 12,
-    "recovered_review": 17,
+    "low_conf_review": 25,
+    "recovered_review": 12,
     "other_near_review": 1,
-    "hard_deny": 13,
+    "hard_deny": 5,
     "intruder_false_open": 1
   },
   "consistency_2_2": {

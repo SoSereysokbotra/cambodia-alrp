@@ -45,3 +45,76 @@ timestamp,git_commit,component,metric,value,split,notes
 2026-07-22T17:30:11,dd108fc,pipeline,province_accuracy,0.9524,real-test,"measured, n=147"
 2026-07-22T17:30:11,dd108fc,pipeline,false_accept_rate,0.0,real-test,neighbour harness
 2026-07-22T17:30:11,dd108fc,pipeline,consistency_flag_precision,0.4545,real-test,"2.2, 22 flagged"
+2026-07-23T10:27:28,e9f2149,pipeline,number_e2e_accuracy,0.6779,real-test,"benchmark_composed.py (n=149), format_validation=on"
+2026-07-23T10:27:28,e9f2149,pipeline,number_cer,0.1515,real-test,"benchmark_composed.py (n=149), format_validation=on"
+2026-07-23T10:27:28,e9f2149,pipeline,detection_rate,0.9597,real-test,"benchmark_composed.py (n=149), format_validation=on"
+2026-07-23T10:27:28,e9f2149,pipeline,composed_exact_match,0.6871,real-test,"measured on 147 frames, 2 unverifiable excluded"
+2026-07-23T10:27:28,e9f2149,pipeline,province_accuracy,0.9524,real-test,"measured, n=147"
+2026-07-23T10:27:28,e9f2149,pipeline,false_accept_rate,0.0,real-test,neighbour harness
+2026-07-23T10:27:28,e9f2149,pipeline,consistency_flag_precision,0.4545,real-test,"2.2, 22 flagged"
+2026-07-23T10:31:27,e9f2149,pipeline,number_e2e_accuracy,0.6779,real-test,"benchmark_composed.py (n=149), format_validation=on"
+2026-07-23T10:31:27,e9f2149,pipeline,number_cer,0.1515,real-test,"benchmark_composed.py (n=149), format_validation=on"
+2026-07-23T10:31:27,e9f2149,pipeline,detection_rate,0.9597,real-test,"benchmark_composed.py (n=149), format_validation=on"
+2026-07-23T10:31:27,e9f2149,pipeline,composed_exact_match,0.6871,real-test,"measured on 147 frames, 2 unverifiable excluded"
+2026-07-23T10:31:27,e9f2149,pipeline,province_accuracy,0.9524,real-test,"measured, n=147"
+2026-07-23T10:31:27,e9f2149,pipeline,false_accept_rate,0.0,real-test,neighbour harness
+2026-07-23T10:31:27,e9f2149,pipeline,consistency_flag_precision,0.4545,real-test,"2.2, 22 flagged"
+2026-07-23T10:33:59,e9f2149,pipeline,number_e2e_accuracy,0.6779,real-test,benchmark_composed.py (n=149)
+2026-07-23T10:33:59,e9f2149,pipeline,number_cer,0.1515,real-test,benchmark_composed.py (n=149)
+2026-07-23T10:33:59,e9f2149,pipeline,detection_rate,0.9597,real-test,benchmark_composed.py (n=149)
+2026-07-23T10:33:59,e9f2149,pipeline,composed_exact_match,0.6871,real-test,"measured on 147 frames, 2 unverifiable excluded"
+2026-07-23T10:33:59,e9f2149,pipeline,province_accuracy,0.9524,real-test,"measured, n=147"
+2026-07-23T10:33:59,e9f2149,pipeline,false_accept_rate,0.0,real-test,neighbour harness
+2026-07-23T10:33:59,e9f2149,pipeline,consistency_flag_precision,0.4545,real-test,"2.2, 22 flagged"
+2026-07-23T10:53:48,e9f2149,pipeline,number_e2e_accuracy,0.6779,real-test,benchmark_composed.py (n=149)
+2026-07-23T10:53:48,e9f2149,pipeline,number_cer,0.1515,real-test,benchmark_composed.py (n=149)
+2026-07-23T10:53:48,e9f2149,pipeline,detection_rate,0.9597,real-test,benchmark_composed.py (n=149)
+2026-07-23T10:53:48,e9f2149,pipeline,composed_exact_match,0.6871,real-test,"measured on 147 frames, 2 unverifiable excluded"
+2026-07-23T10:53:48,e9f2149,pipeline,province_accuracy,0.9524,real-test,"measured, n=147"
+2026-07-23T10:53:48,e9f2149,pipeline,false_accept_rate,0.0,real-test,neighbour harness
+2026-07-23T10:53:48,e9f2149,pipeline,consistency_flag_precision,0.4545,real-test,"2.2, 22 flagged"
+2026-07-23T10:54:01,e9f2149,pipeline,number_e2e_accuracy,0.6779,real-test,benchmark_composed.py (n=149)
+2026-07-23T10:54:01,e9f2149,pipeline,number_cer,0.1515,real-test,benchmark_composed.py (n=149)
+2026-07-23T10:54:01,e9f2149,pipeline,detection_rate,0.9597,real-test,benchmark_composed.py (n=149)
+2026-07-23T10:54:01,e9f2149,pipeline,composed_exact_match,0.6871,real-test,"measured on 147 frames, 2 unverifiable excluded"
+2026-07-23T10:54:01,e9f2149,pipeline,province_accuracy,0.9524,real-test,"measured, n=147"
+2026-07-23T10:54:01,e9f2149,pipeline,false_accept_rate,0.0,real-test,neighbour harness
+2026-07-23T10:54:01,e9f2149,pipeline,consistency_flag_precision,0.4545,real-test,"2.2, 22 flagged"
+2026-07-23T10:54:16,e9f2149,pipeline,number_e2e_accuracy,0.6779,real-test,benchmark_composed.py (n=149)
+2026-07-23T10:54:16,e9f2149,pipeline,number_cer,0.1515,real-test,benchmark_composed.py (n=149)
+2026-07-23T10:54:16,e9f2149,pipeline,detection_rate,0.9597,real-test,benchmark_composed.py (n=149)
+2026-07-23T10:54:16,e9f2149,pipeline,composed_exact_match,0.6871,real-test,"measured on 147 frames, 2 unverifiable excluded"
+2026-07-23T10:54:16,e9f2149,pipeline,province_accuracy,0.9524,real-test,"measured, n=147"
+2026-07-23T10:54:16,e9f2149,pipeline,false_accept_rate,0.0,real-test,neighbour harness
+2026-07-23T10:54:16,e9f2149,pipeline,consistency_flag_precision,0.4545,real-test,"2.2, 22 flagged"
+2026-07-23T10:55:50,e9f2149,pipeline,number_e2e_accuracy,0.6779,real-test,"benchmark_composed.py (n=149), format_validation=off"
+2026-07-23T10:55:50,e9f2149,pipeline,number_cer,0.1515,real-test,"benchmark_composed.py (n=149), format_validation=off"
+2026-07-23T10:55:50,e9f2149,pipeline,detection_rate,0.9597,real-test,"benchmark_composed.py (n=149), format_validation=off"
+2026-07-23T10:55:50,e9f2149,pipeline,composed_exact_match,0.6871,real-test,"measured on 147 frames, 2 unverifiable excluded"
+2026-07-23T10:55:50,e9f2149,pipeline,province_accuracy,0.9524,real-test,"measured, n=147"
+2026-07-23T10:55:50,e9f2149,pipeline,false_accept_rate,0.0,real-test,neighbour harness
+2026-07-23T10:55:50,e9f2149,pipeline,consistency_flag_precision,0.4545,real-test,"2.2, 22 flagged"
+2026-07-23T10:56:02,e9f2149,pipeline,number_e2e_accuracy,0.6779,real-test,"benchmark_composed.py (n=149), format_validation=off"
+2026-07-23T10:56:02,e9f2149,pipeline,number_cer,0.1515,real-test,"benchmark_composed.py (n=149), format_validation=off"
+2026-07-23T10:56:02,e9f2149,pipeline,detection_rate,0.9597,real-test,"benchmark_composed.py (n=149), format_validation=off"
+2026-07-23T10:56:02,e9f2149,pipeline,composed_exact_match,0.6871,real-test,"measured on 147 frames, 2 unverifiable excluded"
+2026-07-23T10:56:02,e9f2149,pipeline,province_accuracy,0.9524,real-test,"measured, n=147"
+2026-07-23T10:56:02,e9f2149,pipeline,false_accept_rate,0.0,real-test,neighbour harness
+2026-07-23T10:56:02,e9f2149,pipeline,consistency_flag_precision,0.4545,real-test,"2.2, 22 flagged"
+2026-07-23T10:56:14,e9f2149,pipeline,number_e2e_accuracy,0.6779,real-test,"benchmark_composed.py (n=149), format_validation=off"
+2026-07-23T10:56:14,e9f2149,pipeline,number_cer,0.1515,real-test,"benchmark_composed.py (n=149), format_validation=off"
+2026-07-23T10:56:14,e9f2149,pipeline,detection_rate,0.9597,real-test,"benchmark_composed.py (n=149), format_validation=off"
+2026-07-23T10:56:14,e9f2149,pipeline,composed_exact_match,0.6871,real-test,"measured on 147 frames, 2 unverifiable excluded"
+2026-07-23T10:56:14,e9f2149,pipeline,province_accuracy,0.9524,real-test,"measured, n=147"
+2026-07-23T10:56:14,e9f2149,pipeline,false_accept_rate,0.0,real-test,neighbour harness
+2026-07-23T10:56:14,e9f2149,pipeline,consistency_flag_precision,0.4545,real-test,"2.2, 22 flagged"
+2026-07-23T10:58:09,e9f2149,crnn,confidence_auc_mean,0.8455,real-test,"PLAN_V2 Phase 2, format_validation=on, SE 0.032"
+2026-07-23T10:58:09,e9f2149,crnn,confidence_auc_min,0.8471,real-test,"Phase 2: min hypothesis REFUTED - 0.7930 without format validation, WORSE than mean 0.8191"
+2026-07-23T10:58:09,e9f2149,crnn,confidence_auc_geometric,0.8545,real-test,"Phase 2: +0.009 vs mean = 0.25 SE, not significant; default stays mean"
+2026-07-23T10:58:33,e9f2149,pipeline,number_e2e_accuracy,0.6779,real-test,benchmark_composed.py (n=149)
+2026-07-23T10:58:33,e9f2149,pipeline,number_cer,0.1515,real-test,benchmark_composed.py (n=149)
+2026-07-23T10:58:33,e9f2149,pipeline,detection_rate,0.9597,real-test,benchmark_composed.py (n=149)
+2026-07-23T10:58:33,e9f2149,pipeline,composed_exact_match,0.6871,real-test,"measured on 147 frames, 2 unverifiable excluded"
+2026-07-23T10:58:34,e9f2149,pipeline,province_accuracy,0.9524,real-test,"measured, n=147"
+2026-07-23T10:58:34,e9f2149,pipeline,false_accept_rate,0.0,real-test,neighbour harness
+2026-07-23T10:58:34,e9f2149,pipeline,consistency_flag_precision,0.4545,real-test,"2.2, 22 flagged"
