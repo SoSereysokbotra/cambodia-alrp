@@ -85,9 +85,9 @@ impossible format — this is the same population as the benchmark's
 | **0** | Restore the instrument ✅ **DONE 2026-07-22** | ~30 min | No | No | Every later measurement |
 | **1** | Plate-format validation ✅ **DONE 2026-07-23** | Low | No | No | Kills the dominant failure mode |
 | **2** | Confidence recalibration ✅ **DONE 2026-07-23 — hypothesis refuted, default kept** | Low | No | No | Makes the REC-005 gate mean something |
-| **3** | Visit-level benchmark | Medium | No | No | Makes Phase 4 measurable |
-| **4** | Multi-frame read fusion | Medium | No | No | Biggest training-free accuracy gain |
-| **5** | Active-learning harvest | Medium | Yes (mined) | **Yes** | Extends the proven CER curve |
+| **3** | Visit-level benchmark ✅ **DONE 2026-07-23** | Medium | No | No | Makes Phase 4 measurable |
+| **4** | ~~Multi-frame read fusion~~ ❌ **CANCELLED — refuted by Phase 3** | Medium | No | No | ~~Biggest training-free accuracy gain~~ — ceiling is 2.1 pp; both implementations lose |
+| **5** | Active-learning harvest ⬅ **now the top priority** | Medium | Yes (mined) | **Yes** | Extends the proven CER curve; the only lever left |
 | **6** | Deployment hardening | Low–Medium | No | No | Removes the "not for real deployment" asterisk |
 
 **Phases 0–4 require no new data and no GPU training.** Training re-enters only
@@ -508,18 +508,119 @@ Add a `--visits` mode to the benchmark (or a sibling
 human-labeled test frames. Phase 5 mines the same pool for *training*, and if
 the two sets blur, both CER and this benchmark become meaningless.
 
-### Gate — do not start Phase 4 until
-- [ ] Visit grouping produces a sane visit count (spot-check: a visit should be
-      tens of frames, not one, and not hundreds)
-- [ ] Visit-level baseline recorded for the **current** best-single-frame logic —
-      this is the number Phase 4 must beat
-- [ ] False-accept rate reported at visit level and equal to 0
+### ✅ DONE (2026-07-23) — and it **refutes Phase 4**
+
+Implemented as `scripts/system/benchmark_visits.py` (`--build` / `--score`), with
+`metrics/visits_manifest.json`, human labels in `metrics/visits_labels.csv`, and
+results in `metrics/visit_benchmark.json`.
+
+**Design decision that made this cheap:** the per-frame CRNN read is already in each
+photo's *filename*, and `plate_reads.photo_path` joins it to `crnn_confidence`. So
+the harness reconstructs visits from recorded reads and never re-runs inference —
+it scores in seconds. This also dodges a trap: the saved photos are **annotated**
+(boxes drawn on them), so replaying the image files through the detector would not
+be a faithful reconstruction.
+
+**Data hygiene — the contamination was real, not hypothetical.** 664 of 6,122 photos
+(10.8%) are **640×640**, the Roboflow export size, i.e. replays of the annotated
+dataset through the pipeline. These are excluded; live captures are 1920×1080 /
+720×480 / 1080×1080. Keeping them would have leaked the 149-frame test set into
+this benchmark.
+
+**Results — 140 labelled visits, 6 distinct vehicles:**
+
+| Strategy | per-visit (micro) | per-plate (macro) |
+|----------|------------------|-------------------|
+| **best_conf (current deployed)** | **75.71%** (106/140) | **61.56%** |
+| majority | 73.57% (103/140) | 56.25% |
+| char_vote | 73.57% (103/140) | 56.25% |
+
+**Both fusion strategies are WORSE than the behaviour they were meant to replace.**
+
+### The oracle bound — why this result is implementation-independent
+
+| Plate | visits | **ORACLE** | best_conf | majority | char_vote |
+|-------|--------|-----------|-----------|----------|-----------|
+| 1A-4249 | 10 | **0** | 0 | 0 | 0 |
+| 1M-7776 | 110 | 95 | **92** | 91 | 91 |
+| 2-8554 | 5 | **0** | 0 | 0 | 0 |
+| 2A-2265 | 2 | 2 | 2 | 2 | 2 |
+| 3A-1311 | 7 | 6 | **6** | 5 | 5 |
+| 4A-1483 | 6 | 6 | **6** | 5 | 5 |
+| **TOTAL** | **140** | **109** | **106** | 103 | 103 |
+
+ORACLE = at least one frame in the visit read the plate correctly. It is the ceiling
+for *any* strategy that selects or fuses among observed reads.
+
+1. **`best_conf` already achieves 106 of a 109 ceiling — 97% of what is attainable.**
+   The entire remaining headroom for Phase 4 is **3 visits (2.1 pp)**, not the large
+   win the plan assumed.
+2. **31 of 140 visits (22%) are unreachable by any fusion** — for `1A-4249` and
+   `2-8554` the model is *never* right in *any* frame. You cannot vote your way to an
+   answer nobody proposed. That is a model failure, not a fusion failure.
+3. Because the oracle is a property of the observed reads, this bound holds for a
+   smarter implementation too — including one weighted by the per-character
+   confidences Phase 2 added. (The offline harness cannot simulate per-character
+   weighting, since historical logs only stored whole-read confidence; but the
+   ceiling caps that variant at the same 109.)
+
+### Why the Phase 4 intuition was wrong
+
+The plan argued fusion "uses all 40 frames instead of betting the decision on one."
+That reasoning treats the frames as independent samples of equal quality. They are
+not: a visit is typically **one good view plus many blurry ones**, and the confidence
+score already identifies the good one. Averaging the bad frames in *dilutes* the
+signal — which is exactly the pattern in the table, where voting loses a visit on
+`1M-7776`, `3A-1311` and `4A-1483` alike.
+
+### Honest limits of this corpus
+- **Only 6 distinct vehicles**, and one (`1M-7776`) is 110 of 140 visits — hence the
+  macro column, which is the number to quote.
+- 27 visits were **excluded as `SKIP`**: the camera was pointed at a *phone screen*
+  displaying a plate, not a vehicle. Not a gate visit.
+- The corpus comes from development testing, not a deployed gate, so absolute values
+  should not be read as production accuracy. **The oracle argument does not depend on
+  any of this** — it is the robust part of the finding.
+
+### Gate — PASSED
+- [x] Visit grouping sane (167 visits ≥5 frames; median 21, max 246 frames)
+- [x] Visit-level baseline recorded for current best-single-frame logic: **75.71% micro / 61.56% macro**
+- [x] False-accept rate: not applicable at visit level here — the corpus has no
+      whitelist context (6 known vehicles, no intruder set). Frame-level FAR stays 0.00%.
 
 ---
 
-# Phase 4 — Multi-frame read fusion
+# Phase 4 — Multi-frame read fusion  ❌ **DO NOT BUILD** (refuted by Phase 3, 2026-07-23)
 
-### Why
+> **Status: cancelled on evidence.** Phase 3 measured this phase's premise before it
+> was built — which is exactly why the plan ordered them this way — and the premise
+> does not hold.
+>
+> | | |
+> |---|---|
+> | Claimed here | "the biggest free accuracy gain available", "likely worth more than the next CRNN fine-tune" |
+> | **Measured** | **Maximum possible gain: 3 visits (2.1 pp).** Both natural implementations score *worse* than the current logic (73.57% vs 75.71%). |
+>
+> The current `best_conf` selector already reaches **106 of the 109-visit oracle
+> ceiling (97%)**, and **22% of visits contain no correct read in any frame**, so no
+> fusion can reach them. See the Phase 3 table above for the per-plate breakdown and
+> for why the "use all 40 frames" intuition fails (a visit is one good view plus many
+> blurry ones; confidence already finds the good one).
+>
+> **Where the effort should go instead:** the binding constraint is the model, not
+> the aggregation — 31 of 140 visits are wrong in *every* frame. That is **Phase 5**
+> (more real training data), which the CER curve already shows working.
+>
+> **The one piece worth keeping:** requiring *k* agreeing frames before
+> `ENTRY_ALLOWED` is a *safety* mechanism, not an accuracy one, and it was never
+> tested by the accuracy benchmark above. It remains the only identified mitigation
+> for the confidently-wrong false open documented in Phase 2 (`3E-8990` read for
+> `3A-8990` with the wrong character at 0.9985). Consider it on its own merits as a
+> small safety change — not as the accuracy project described below.
+>
+> The original reasoning is preserved below for the record.
+
+### Why (original — premise now refuted)
 Finding F. `_dedup_persist` ([`alpr_system.py:522-555`](../src/core/alpr_system.py#L522-L555))
 collapses a visit into one audit row and keeps the **single highest-confidence
 frame**, discarding the other ~39. Your own working tree shows why that is a bad
@@ -680,3 +781,34 @@ later number depends on it.** Then Phase 1 (format) and Phase 2 (confidence),
 both cheap, both provably unable to add false-accept risk. Then Phase 3 before
 Phase 4, because a still-frame benchmark cannot see a multi-frame fix. Training
 only re-enters at Phase 5.
+
+---
+
+## Where things actually landed (2026-07-23)
+
+Phases 0–3 are done. Of the three code changes this plan proposed, **one shipped,
+two were refuted by their own gates** — which is the plan working as intended.
+
+| Phase | Outcome |
+|-------|---------|
+| 0 Restore the instrument | ✅ Composed exact-match **68.71%** measured for the first time; 7 of 149 province labels were wrong |
+| 1 Format validation | ✅ **Shipped.** 8 silent DENYs → REVIEW, 0 correct opens lost, FAR still 0 |
+| 2 Confidence recalibration | ❌ **Refuted.** `min` is *worse* than `mean`; all modes within noise. Default unchanged |
+| 3 Visit benchmark | ✅ Built — and it refuted Phase 4 |
+| 4 Multi-frame fusion | ❌ **Cancelled.** Ceiling 2.1 pp; both implementations lose to current logic |
+| 5 Active-learning harvest | ⬅ **Now the top priority** |
+
+**The consistent signal across all four phases: the CRNN itself is the binding
+constraint, and no amount of decode-time or aggregation-time cleverness moves it.**
+
+- Phase 0: every province error landed on a frame whose number was already wrong —
+  the number branch is the whole composed gap.
+- Phase 2: the false open is *confidently* wrong (0.9985 on the wrong character), so
+  no confidence statistic can catch it.
+- Phase 3: 22% of visits are wrong in *every single frame*, so no fusion can fix them.
+
+All three point the same way: **Phase 5 (more real training data) is the only
+remaining lever**, and the project's own CER curve (94.89% → 10.21% as labels grew
+0 → 473, never plateauing) is the evidence it works. Phase 6.3's hard-condition
+collection matters for the same reason — `1A-4249` and `2-8554` fail in every frame
+because nothing like them is in the training set.

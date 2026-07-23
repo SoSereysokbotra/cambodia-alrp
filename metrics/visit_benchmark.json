@@ -1,0 +1,28 @@
+{
+  "labelled_visits": 140,
+  "total_visits": 167,
+  "distinct_plates": 6,
+  "strategies": {
+    "best_conf (current)": {
+      "micro": 0.7571428571428571,
+      "macro": 0.6155844155844156,
+      "correct": 106,
+      "n": 140,
+      "n_plates": 6
+    },
+    "majority": {
+      "micro": 0.7357142857142858,
+      "macro": 0.5624819624819625,
+      "correct": 103,
+      "n": 140,
+      "n_plates": 6
+    },
+    "char_vote": {
+      "micro": 0.7357142857142858,
+      "macro": 0.5624819624819625,
+      "correct": 103,
+      "n": 140,
+      "n_plates": 6
+    }
+  }
+}

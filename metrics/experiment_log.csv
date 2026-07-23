@@ -118,3 +118,6 @@ timestamp,git_commit,component,metric,value,split,notes
 2026-07-23T10:58:34,e9f2149,pipeline,province_accuracy,0.9524,real-test,"measured, n=147"
 2026-07-23T10:58:34,e9f2149,pipeline,false_accept_rate,0.0,real-test,neighbour harness
 2026-07-23T10:58:34,e9f2149,pipeline,consistency_flag_precision,0.4545,real-test,"2.2, 22 flagged"
+2026-07-23T11:11:03,dcdaf4f,pipeline,visit_accuracy_best_conf,0.7571,visits,"PLAN_V2 Phase 3, 140 visits/6 plates, macro 0.6156"
+2026-07-23T11:11:03,dcdaf4f,pipeline,visit_accuracy_char_vote,0.7357,visits,Phase 3: fusion is WORSE than best_conf; macro 0.5625
+2026-07-23T11:11:04,dcdaf4f,pipeline,visit_oracle_ceiling,0.7786,visits,Phase 3: 109/140 visits have >=1 correct frame; best_conf already at 97% of this ceiling
