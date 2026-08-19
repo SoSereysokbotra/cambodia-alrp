@@ -1,11 +1,11 @@
 {
   "n_frames": 149,
   "detection_rate": 0.959731543624161,
-  "number_accuracy": 0.6778523489932886,
-  "number_cer": 0.1514543630892678,
-  "number_failures": 42,
+  "number_accuracy": 0.7651006711409396,
+  "number_cer": 0.10130391173520562,
+  "number_failures": 29,
   "province_accuracy": 0.9523809523809523,
-  "composed_accuracy": 0.6870748299319728,
+  "composed_accuracy": 0.7755102040816326,
   "composed_kind": "measured",
   "composed_measured_on": 147,
   "false_accepts": 0,
@@ -13,21 +13,18 @@
   "neighbour_whitelist_size": 137,
   "gate_sim": {
     "detected": 143,
-    "exact_open": 100,
-    "low_conf_review": 25,
-    "recovered_review": 12,
-    "other_near_review": 1,
-    "hard_deny": 5,
+    "exact_open": 114,
+    "low_conf_review": 8,
+    "recovered_review": 8,
+    "other_near_review": 2,
+    "hard_deny": 11,
     "intruder_false_open": 1
   },
   "consistency_2_2": {
-    "flagged": 22,
-    "flag_on_wrong": 10,
-    "flag_on_correct": 12,
-    "flag_precision": 0.45454545454545453,
-    "reasons": {
-      "weak-number-alignment": 21,
-      "uncertain-province": 1
-    }
+    "flagged": 0,
+    "flag_on_wrong": 0,
+    "flag_on_correct": 0,
+    "flag_precision": 0.0,
+    "reasons": {}
   }
 }

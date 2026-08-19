@@ -1,0 +1,10 @@
+{
+  "tag": "candidate679",
+  "split": "test",
+  "weights": "crnn_ft_phase5b.pth",
+  "n": 149,
+  "cer": 0.047,
+  "word_accuracy": 0.8188,
+  "mean_confidence": 0.9481,
+  "below_gate_pct": 0.0067
+}

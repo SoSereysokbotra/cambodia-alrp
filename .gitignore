@@ -34,6 +34,7 @@ data/interim/
 data/annotated/
 data/auto_labeled/
 data/crnn_crops/
+data/crnn_crops_augmented/
 data/synthetic/
 data/**/images/
 data/**/labels/
@@ -81,3 +82,13 @@ desktop.ini
 
 # --- Local DB backups ---
 backups/
+
+# PLAN_V2 Phase 6.1 — admin password hash (never commit)
+configs/admin_auth.json
+
+# Google Drive credentials & sync state (NEVER commit)
+configs/gdrive_credentials.json
+configs/gdrive_token.json
+configs/gdrive_sync_state.json
+configs/_gdrive_test.txt
+

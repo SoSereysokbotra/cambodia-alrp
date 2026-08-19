@@ -43,15 +43,50 @@ IDX_TO_CHAR = {i: c for i, c in enumerate(CHARSET)}
 # --------------------------------------------------------------------------- #
 # Model
 # --------------------------------------------------------------------------- #
+class STN(nn.Module):
+    """Spatial Transformer Network — the 'straightening layer' (Way 1).
+
+    A small CNN looks at the crop and predicts an affine transform (which includes
+    rotation), then warps the crop before the reader sees it. It is initialised to
+    the IDENTITY transform, so it starts as a no-op and *learns* the correction
+    purely from the CTC reading loss — i.e. the model teaches itself to turn a
+    rotated/upside-down plate upright before reading. No angle labels needed.
+    """
+
+    def __init__(self, img_h: int = 64, img_w: int = 320) -> None:
+        super().__init__()
+        self.loc = nn.Sequential(
+            nn.Conv2d(1, 16, 3, 1, 1), nn.BatchNorm2d(16), nn.ReLU(True), nn.MaxPool2d(2),
+            nn.Conv2d(16, 32, 3, 1, 1), nn.BatchNorm2d(32), nn.ReLU(True), nn.MaxPool2d(2),
+            nn.Conv2d(32, 64, 3, 1, 1), nn.BatchNorm2d(64), nn.ReLU(True),
+            nn.AdaptiveAvgPool2d((4, 8)),
+        )
+        self.fc = nn.Sequential(nn.Linear(64 * 4 * 8, 128), nn.ReLU(True),
+                                nn.Linear(128, 6))
+        # start as identity so the reader is unchanged before any training
+        self.fc[-1].weight.data.zero_()
+        self.fc[-1].bias.data.copy_(
+            torch.tensor([1, 0, 0, 0, 1, 0], dtype=torch.float))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        theta = self.fc(self.loc(x).flatten(1)).view(-1, 2, 3)
+        grid = F.affine_grid(theta, x.size(), align_corners=False)
+        return F.grid_sample(x, grid, align_corners=False)
+
+
 class CRNN(nn.Module):
     """Convolutional Recurrent Neural Network for sequence text recognition."""
 
     def __init__(self, img_h: int = 64, img_w: int = 320,
-                 n_classes: int = N_CLASSES, n_hidden: int = 256) -> None:
+                 n_classes: int = N_CLASSES, n_hidden: int = 256,
+                 use_stn: bool = False) -> None:
         super().__init__()
         self.img_h = img_h
         self.img_w = img_w
         self.n_classes = n_classes
+        # Way 1: optional learnable straightening layer in front of the reader.
+        self.use_stn = use_stn
+        self.stn = STN(img_h, img_w) if use_stn else None
 
         # CNN backbone. Asymmetric pooling preserves width (the "time" axis)
         # while shrinking height toward 1.
@@ -79,6 +114,8 @@ class CRNN(nn.Module):
         x : (batch, 1, img_h, img_w)
         returns log-probs of shape (seq_len, batch, n_classes) for CTC.
         """
+        if self.stn is not None:                # Way 1: straighten first
+            x = self.stn(x)
         conv = self.cnn(x)                      # (b, c, h, w)
         b, c, h, w = conv.size()
         if h != 1:
@@ -136,8 +173,6 @@ def load_crnn(weights_path: str | Path, device: str = "cpu",
     weights_path = Path(weights_path)
     if not weights_path.exists():
         raise FileNotFoundError(f"CRNN weights not found: {weights_path}")
-    model = CRNN(img_h=img_h, img_w=img_w,
-                 n_classes=len(charset) + 1, n_hidden=n_hidden)
     # weights_only=True is safe here (we save a pure state_dict) and silences
     # the torch pickle warning.
     try:
@@ -147,6 +182,11 @@ def load_crnn(weights_path: str | Path, device: str = "cpu",
     # accept either a raw state_dict or a checkpoint dict
     if isinstance(state, dict) and "model_state" in state:
         state = state["model_state"]
+    # Auto-detect a straightening layer (Way 1): if the weights include STN params,
+    # build the model WITH the STN so the shapes match — no flag needed anywhere.
+    use_stn = any(k.startswith("stn.") for k in state.keys())
+    model = CRNN(img_h=img_h, img_w=img_w,
+                 n_classes=len(charset) + 1, n_hidden=n_hidden, use_stn=use_stn)
     model.load_state_dict(state)
     model.to(device).eval()
     return model

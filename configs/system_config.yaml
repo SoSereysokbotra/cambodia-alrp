@@ -1,117 +1,78 @@
-# =====================================================================
-# Cambodian ALPR — system configuration
-# All paths are relative to the project root.
-# =====================================================================
-
-camera_source: "http://10.45.245.88:8080/video"   # webcam=0, rtsp url, video, or folder
-# SRS Phase 5 — live smartphone RTSP input (VID-001..004). Point camera_source at a
-# phone stream, e.g. Android "IP Webcam": rtsp://<phone-ip>:8080/h264_ulaw.sdp
-#   or MJPEG over http: http://<phone-ip>:8080/video ; iOS: use Iriun / Larix.
+camera_source: http://192.168.2.193:8080/video
 camera:
-  reconnect_interval_sec: 5      # VID-001: wait between reconnect attempts
-  max_reconnect_attempts: 10     # VID-001: give up after this many attempts
-  queue_size: 5                  # VID-004: bounded buffer, keep only latest frame
-  frame_timeout_sec: 2.0         # get_frame() wait before returning None
-yolo_weights: "models/detection/best.pt"             # province-line detector
-number_weights: "models/detection/number_best.pt"    # number-line detector (two-detector flow)
-crnn_weights: "models/recognition/crnn_finetuned.pth"  # fine-tuned on real number crops (Phase 4)
-charset_path: "models/recognition/charset.txt"
-db_path: "plates.db"
-
-# If the input is already a cropped plate (e.g. synthetic images), set true to
-# skip YOLO and feed the whole frame to CRNN. Leave false for real gate photos.
+  reconnect_interval_sec: 5
+  max_reconnect_attempts: 10
+  queue_size: 5
+  frame_timeout_sec: 2.0
+yolo_weights: models/detection/best.pt
+number_weights: models/detection/number_best.pt
+crnn_weights: models/recognition/crnn_finetuned.pth
+charset_path: models/recognition/charset.txt
+db_path: plates.db
 assume_crop: false
-
 mqtt:
   enabled: false
-  broker_host: "localhost"
+  broker_host: localhost
   broker_port: 1883
-  gate_id: "main_gate"
+  gate_id: main_gate
   open_duration_sec: 3
-
 gate:
-  yolo_confidence_threshold: 0.50
-  number_confidence_threshold: 0.40  # number-line detector (number_best.pt)
-  crnn_confidence_threshold: 0.70   # SRS REC-005: below this -> REVIEW_REQUIRED
-  # ROADMAP 1.2 — whitelist-constrained matching (safe): a confident read within
-  # `match_max_distance` edits of a registered plate (but not an exact hit) is
-  # routed to REVIEW_REQUIRED, NOT opened. Gate auto-open stays exact-match only.
+  yolo_confidence_threshold: 0.5
+  number_confidence_threshold: 0.4
+  crnn_confidence_threshold: 0.7
   constrained_matching: true
-  match_max_distance: 1             # max edit distance for a review candidate
-  # PLAN_V2 Phase 1 — plate-format validation (level 1: REJECT only).
-  # A real Cambodian number is D L-DDDD / D-DDDD / DLL-DDDD (98.6% of 622 real
-  # labels) or a CAMBODIA-series vanity plate. Measured on plates.db, 726 of 5952
-  # CONFIDENT reads (12.2%) had a shape no plate can have. When true, such a read
-  # gets confidence 0 -> REVIEW_REQUIRED instead of being treated as confident.
-  # Only ever LOWERS a confidence, so it cannot create a false accept.
-  # ON since 2026-07-23: measured on the 149-frame test set it converts 8 silent
-  # ENTRY_DENIEDs into REVIEWs and costs ZERO correct auto-opens (100 -> 100).
+  match_max_distance: 1
   format_validation: true
-  # PLAN_V2 Phase 2 — how per-character confidences reduce to one number.
-  #   mean      : legacy, average over non-blank timesteps (hides one bad char)
-  #   min       : the weakest character — one wrong char breaks an exact match
-  #   geometric : exp(mean(log p)), between the two
-  # min <= mean always, so switching can only LOWER confidences (fewer auto-opens,
-  # no new false-accept risk) — but re-tune crnn_confidence_threshold after.
-  confidence_mode: "mean"
-  # ROADMAP 2.2 — province<->number cross-validation. A confident, non-whitelisted
-  # read is sent to REVIEW (not silently DENIED) when the branches disagree:
-  #   * number box poorly aligned with the province box (scale-invariant overlap
-  #     `align` below min -> likely mis-paired in a multi-plate frame), or
-  #   * a province prefix composed from a classifier below province_confidence_min.
-  consistency_check: true
-  province_confidence_min: 0.55     # below this, an added province prefix is suspect
-  number_alignment_min: 0.20        # min align (overlap/smaller-box) to trust pairing
-  # --- Parking mode (open parking: any car in, matched & CLEARED on exit) ---
-  # When true, the gate STOPS using the whitelist. Instead a confident read that
-  # is NOT currently inside is treated as an ENTRY (gate opens, session recorded);
-  # a read that IS inside is treated as an EXIT (gate opens, session DELETED, so
-  # the plate is cleared from the system). Only cars parked right now are stored.
-  # SECURITY NOTE: this opens the gate for EVERY car on entry — no whitelist.
+  confidence_mode: mean
+  orientation_search: false
+  consistency_check: false
+  province_confidence_min: 0.55
+  number_alignment_min: 0.2
   parking_mode: false
-  parking_camera_role: "auto"       # auto (single cam: toggle by presence) | entry | exit
-  parking_exit_fuzzy: true          # let an exit match a plate misread by 1 char
-  parking_stale_hours: 12           # auto-clear sessions older than this (missed exits)
-  # Permit parking (hybrid, option 3): when true, ENTRY is allowed only for a plate
-  # in the whitelist (a "permit"), but the "currently inside" session is still
-  # DELETED on exit (the permit is kept). Grant permits with the admin panel's
-  # [Authorize] button. When false, entry is open to any car (pure open parking).
+  parking_camera_role: auto
+  parking_exit_fuzzy: true
+  parking_stale_hours: 12
   parking_require_permit: false
-  location: "Main Gate"             # logged with every read (DB location column)
-
+  location: Main Gate
 display:
   show_fps: true
   show_latency: true
   show_plate_text: true
   font_scale: 0.7
-
 output:
   save_annotated: true
   save_crops: false
-  output_dir: "outputs/"
-  photo_dir: "photos/"          # SRS LOG-002: per-read evidence photos
-
-# SRS Phase 6 — detection crop margin (DET-005)
-# NOTE: kept at 0.0. Padding the crops fed to the fine-tuned CRNN regresses
-# end-to-end number accuracy 70.6% -> 46.2% (the CRNN was fine-tuned on TIGHT
-# number crops). DET-005's "margin of context" is instead satisfied by the
-# full-frame evidence photo saved per read (LOG-002). Documented deviation.
+  output_dir: outputs/
+  photo_dir: photos/
 detection:
-  crop_padding: 0.0            # expand each bbox by this fraction before cropping
-
+  crop_padding: 0.0
 logging:
-  level: "INFO"
-  log_dir: "logs/"
-  # Live de-duplication: at ~20 FPS one car in view for a few seconds would log
-  # dozens of rows (many mis-reads), burying the correct one. Instead, collapse
-  # all reads of one car into ONE audit row and keep upgrading it to the highest-
-  # confidence reading during the visit — so staff see a single, correct entry.
+  level: INFO
+  log_dir: logs/
   dedup_enabled: true
-  dedup_gap_sec: 3.0            # a plate not seen for this long counts as a NEW visit
-  dedup_merge_edits: 2         # reads within this many char-edits = the same car
-
-# SRS Phase 9 — health monitoring & alerts (HLT-001/002/003, PERF-004, AVAIL-001)
+  dedup_gap_sec: 3.0
+  dedup_merge_edits: 2
 health:
-  metrics_every_frames: 100     # write a system_metrics sample every N frames
-  latency_alert_ms: 500         # alert if avg end-to-end latency exceeds this
-  disconnect_alert_sec: 15      # alert if the camera stays disconnected this long
+  metrics_every_frames: 100
+  latency_alert_ms: 500
+  disconnect_alert_sec: 15
+gdrive:
+  enabled: true
+  credentials_path: configs/gdrive_credentials.json
+  token_path: configs/gdrive_token.json
+  sync_state_path: configs/gdrive_sync_state.json
+  root_folder_name: Cambodian ALPR Project
+  auto_upload:
+    photos: true
+    outputs: true
+    logs: true
+    db_backup: true
+    db_backup_interval_hours: 6
+  sync:
+    models: bidirectional
+    data: upload_only
+    runs: upload_only
+    results: upload_only
+  cleanup:
+    delete_local_after_upload: false
+    keep_local_days: 30

@@ -18,6 +18,7 @@ Or run a task directly:
     python main.py admin         # web panel to manage the whitelist (browser)
     python main.py accept        # SRS acceptance test (16 checks)
     python main.py camera <url>  # set camera_source (phone URL, 0=webcam, or a folder)
+    python main.py gdrive <cmd>  # Google Drive: setup|status|sync|upload|download|cleanup
 
 Always run inside the venv (.\\.venv\\Scripts\\activate) so it uses the GPU build.
 """
@@ -144,14 +145,14 @@ def read_image(path: str | None = None) -> None:
 
 
 def launch_admin() -> None:
-    """Start the web admin panel and open it in the default browser."""
-    import webbrowser
+    """Start the web admin panel; it opens the browser itself once it's listening.
+
+    (We do NOT open the browser here — doing so before the server bound was the
+    cause of the recurring "localhost refused to connect". admin_web.py --open
+    launches the browser from a thread only after the socket is ready.)
+    """
     print(" starting web admin panel (Ctrl+C to stop)...")
-    try:
-        webbrowser.open("http://localhost:5000")
-    except Exception:
-        pass
-    _run("admin_web.py")
+    _run("admin_web.py", "--open")
 
 
 def view_inside() -> None:
@@ -195,6 +196,141 @@ def view_db() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Google Drive integration
+# --------------------------------------------------------------------------- #
+def _gdrive_storage():
+    """Create a GDriveStorage instance from the config."""
+    from utils.gdrive_storage import GDriveStorage
+    cfg = _load_cfg()
+    gdrive_cfg = cfg.get("gdrive", {})
+    return GDriveStorage(gdrive_cfg, ROOT)
+
+
+def gdrive_cmd(args: list[str]) -> None:
+    """Handle all `python main.py gdrive <action>` subcommands."""
+    import logging
+    logging.basicConfig(level=logging.INFO, format="  %(message)s")
+
+    if not args:
+        print("""
+usage: python main.py gdrive <action>
+
+  setup      First-time setup (install deps, OAuth login, create Drive folders)
+  status     Show sync status and Drive storage usage
+  sync       Sync all configured folders to/from Google Drive
+  upload <p> Upload a specific file or folder
+  download   Download tracked files from Drive to local
+  backup     Backup the database to Google Drive
+  cleanup    List local files already backed up (add --delete to remove them)
+""")
+        return
+
+    action = args[0].lower()
+
+    if action == "setup":
+        _run_script = ROOT / "scripts" / "setup" / "setup_gdrive.py"
+        subprocess.run([PY, str(_run_script)])
+
+    elif action == "status":
+        try:
+            gd = _gdrive_storage()
+            gd.authenticate()
+            st = gd.get_status()
+            print("\n== Google Drive Status ==")
+            for k, v in st.items():
+                print(f"  {k:<20}: {v}")
+        except Exception as exc:
+            print(f"  error: {exc}")
+            print("  Tip: run 'python main.py gdrive setup' first.")
+
+    elif action == "sync":
+        try:
+            gd = _gdrive_storage()
+            gd.authenticate()
+            print("\n== Syncing all configured folders... ==")
+            results = gd.sync_all(force="--force" in args)
+            for folder, stats in results.items():
+                print(f"  {folder}: {stats}")
+            print("\n  Done!")
+        except Exception as exc:
+            print(f"  error: {exc}")
+
+    elif action == "upload":
+        if len(args) < 2:
+            print("usage: python main.py gdrive upload <file-or-folder>")
+            return
+        target = Path(args[1])
+        if not target.is_absolute():
+            target = ROOT / target
+        try:
+            gd = _gdrive_storage()
+            gd.authenticate()
+            gd.ensure_folder_tree()
+            if target.is_dir():
+                results = gd.upload_folder(target, show_progress=True)
+                print(f"\n  Uploaded {sum(1 for v in results.values() if v)} files.")
+            elif target.is_file():
+                fid = gd.upload_file(target)
+                print(f"  Uploaded: {target.name} (id={fid})")
+            else:
+                print(f"  not found: {target}")
+        except Exception as exc:
+            print(f"  error: {exc}")
+
+    elif action == "download":
+        if len(args) < 2:
+            print("usage: python main.py gdrive download <folder>")
+            print("  e.g.: python main.py gdrive download models/")
+            return
+        try:
+            gd = _gdrive_storage()
+            gd.authenticate()
+            results = gd.download_folder(args[1])
+            print(f"  Downloaded {len(results)} files.")
+        except Exception as exc:
+            print(f"  error: {exc}")
+
+    elif action == "backup":
+        try:
+            gd = _gdrive_storage()
+            gd.authenticate()
+            gd.ensure_folder_tree()
+            cfg = _load_cfg()
+            db_path = cfg.get("db_path", "plates.db")
+            fid = gd.backup_database(db_path)
+            if fid:
+                print(f"  Database backed up to Drive (id={fid})")
+            else:
+                print("  Backup failed.")
+        except Exception as exc:
+            print(f"  error: {exc}")
+
+    elif action == "cleanup":
+        try:
+            gd = _gdrive_storage()
+            gd.authenticate()
+            cfg = _load_cfg()
+            days = cfg.get("gdrive", {}).get("cleanup", {}).get("keep_local_days", 30)
+            dry = "--delete" not in args
+            files = gd.cleanup_local(older_than_days=days, dry_run=dry)
+            if dry:
+                print(f"\n  {len(files)} file(s) eligible for cleanup (backed up, older than {days} days):")
+                for f in files[:20]:
+                    print(f"    {f}")
+                if len(files) > 20:
+                    print(f"    ... and {len(files) - 20} more")
+                print("\n  Run with --delete to actually remove them.")
+            else:
+                print(f"  Deleted {len(files)} local file(s).")
+        except Exception as exc:
+            print(f"  error: {exc}")
+
+    else:
+        print(f"  unknown gdrive action: {action}")
+        print("  valid: setup | status | sync | upload | download | backup | cleanup")
+
+
+# --------------------------------------------------------------------------- #
 # menu
 # --------------------------------------------------------------------------- #
 MENU = """
@@ -210,6 +346,7 @@ MENU = """
   7) Set camera source      (phone URL, 0=webcam, folder)
   8) Admin panel (web)      (manage whitelist in a browser)
   9) Read an image          (get its exact plate text -> enroll)
+  g) Google Drive           (sync, upload, download, backup)
   0) Quit
 ============================================================"""
 
@@ -243,6 +380,34 @@ def interactive() -> None:
             launch_admin()
         elif choice == "9":
             read_image()
+        elif choice == "g":
+            print("\n== Google Drive ==")
+            print("  1) Setup (first time)")
+            print("  2) Status")
+            print("  3) Sync all")
+            print("  4) Upload a file/folder")
+            print("  5) Download from Drive")
+            print("  6) Backup database")
+            print("  7) Cleanup local files")
+            gc = input(" choose > ").strip()
+            if gc == "1":
+                gdrive_cmd(["setup"])
+            elif gc == "2":
+                gdrive_cmd(["status"])
+            elif gc == "3":
+                gdrive_cmd(["sync"])
+            elif gc == "4":
+                p = input(" path to upload: ").strip()
+                if p:
+                    gdrive_cmd(["upload", p])
+            elif gc == "5":
+                p = input(" folder to download (e.g. models/): ").strip()
+                if p:
+                    gdrive_cmd(["download", p])
+            elif gc == "6":
+                gdrive_cmd(["backup"])
+            elif gc == "7":
+                gdrive_cmd(["cleanup"])
         else:
             print(" ? unknown choice")
         input("\n[enter] to return to menu ...")
@@ -280,6 +445,8 @@ def main() -> None:
             set_camera_source(rest[0])
         else:
             print("usage: python main.py camera <url|0|folder>")
+    elif cmd == "gdrive":
+        gdrive_cmd(rest)
     else:
         print(__doc__)
 

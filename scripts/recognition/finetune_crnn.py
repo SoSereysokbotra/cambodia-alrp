@@ -20,6 +20,7 @@ Output:
 Run (after labelling train crops):
     python scripts/recognition/finetune_crnn.py
     python scripts/recognition/finetune_crnn.py --epochs 60 --real-oversample 8
+    python scripts/recognition/finetune_crnn.py --extra-real-csv data/crnn_crops_augmented/augmented_labels.csv
 """
 
 from __future__ import annotations
@@ -80,7 +81,7 @@ def cer(preds, tgts):
     return e / max(c, 1)
 
 
-def read_csv(path: Path, match: str | None):
+def read_csv(path: Path, match: str | None, forbid_test: bool = False):
     rows = []
     if not path.exists():
         return rows
@@ -91,15 +92,27 @@ def read_csv(path: Path, match: str | None):
             t = "".join(ch for ch in t if ch in CHAR_TO_IDX)
             if not p or not t:
                 continue
-            if match and match not in p.replace("\\", "/"):
+            norm = p.replace("\\", "/")
+            if match and match not in norm:
                 continue
+            if forbid_test and "/test/" in norm:
+                raise ValueError(f"refusing test-split row in training CSV: {p}")
             rows.append((p, t))
     return rows
+
+
+# Probability of flipping a training crop 180 deg (upside-down). 0.0 = original
+# behaviour. Set by --rotate180 so the CRNN learns to read upside-down plates
+# (the label is unchanged; the model must learn the flipped glyphs + reversed order).
+ROTATE180_PROB = 0.0
 
 
 def augment(img: np.ndarray) -> np.ndarray:
     """Light appearance augmentation to expand the small real set."""
     import cv2
+    # ROTATION: teach the CRNN to read upside-down crops (MODEL training approach).
+    if ROTATE180_PROB and random.random() < ROTATE180_PROB:
+        img = cv2.rotate(img, cv2.ROTATE_180)
     h, w = img.shape
     # brightness / contrast
     if random.random() < 0.7:
@@ -170,10 +183,32 @@ def main() -> None:
     ap.add_argument("--match", default="/train/", help="Substring selecting REAL train rows.")
     ap.add_argument("--val-frac", type=float, default=0.15)
     ap.add_argument("--real-oversample", type=int, default=6)
+    ap.add_argument("--extra-real-csv", type=Path, default=None,
+                    help="Train-only hard-condition rows, e.g. output from augment_real_crops.py.")
+    ap.add_argument("--extra-match", default="/train/",
+                    help="Substring selecting rows from --extra-real-csv.")
+    ap.add_argument("--extra-real-oversample", type=int, default=1)
     ap.add_argument("--synth-n", type=int, default=3000, help="Synthetic samples to mix in.")
     ap.add_argument("--device", default=None)
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--out", type=Path, default=OUT,
+                    help="where to write the weights. Defaults to the DEPLOYED "
+                         "crnn_finetuned.pth — pass a new path to keep the current "
+                         "model intact while evaluating a candidate (PLAN_V2 Phase 5).")
+    ap.add_argument("--rotate180", type=float, default=0.0,
+                    help="probability of flipping a training crop upside-down "
+                         "(e.g. 0.5). Teaches the CRNN to read 180-degree plates.")
+    ap.add_argument("--stn", action="store_true",
+                    help="Way 1: add a learnable straightening layer (Spatial "
+                         "Transformer) that turns rotated crops upright before "
+                         "reading. Use WITH --rotate180 so it has rotations to learn from.")
     args = ap.parse_args()
+    out_path = args.out
+
+    global ROTATE180_PROB
+    ROTATE180_PROB = args.rotate180
+    if ROTATE180_PROB:
+        print(f"[aug] upside-down (180) augmentation ON, p={ROTATE180_PROB}")
 
     random.seed(args.seed)
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
@@ -182,7 +217,7 @@ def main() -> None:
         print(f"[X] base weights not found: {args.base}")
         sys.exit(1)
 
-    real = read_csv(args.real_csv, args.match)
+    real = read_csv(args.real_csv, args.match, forbid_test=True)
     if len(real) < 20:
         print(f"[X] only {len(real)} real '{args.match}' labels found in {args.real_csv}.")
         print("    Label train crops first: make_label_sheet.py --split train")
@@ -192,17 +227,31 @@ def main() -> None:
     n_val = max(5, int(len(real) * args.val_frac))
     real_val, real_train = real[:n_val], real[n_val:]
 
+    extra_real = []
+    if args.extra_real_csv:
+        extra_real = read_csv(args.extra_real_csv, args.extra_match, forbid_test=True)
+        if not extra_real:
+            print(f"[X] no extra real '{args.extra_match}' rows found in {args.extra_real_csv}.")
+            sys.exit(1)
+
     synth = read_csv(SYNTH_CSV, None)
     random.shuffle(synth)
     synth = synth[:args.synth_n]
 
-    train_samples = real_train * args.real_oversample + synth
+    train_samples = (
+        real_train * args.real_oversample
+        + extra_real * args.extra_real_oversample
+        + synth
+    )
     random.shuffle(train_samples)
 
     print("=" * 60)
     print(" FINE-TUNE CRNN ON REAL CROPS")
-    print(f"   real train {len(real_train)} (x{args.real_oversample}) + synth {len(synth)} "
-          f"= {len(train_samples)} | real val {len(real_val)}")
+    print(f"   real train {len(real_train)} (x{args.real_oversample}) + "
+          f"extra hard {len(extra_real)} (x{args.extra_real_oversample}) + "
+          f"synth {len(synth)} = {len(train_samples)} | real val {len(real_val)}")
+    if extra_real:
+        print(f"   extra-real CSV is train-only: {args.extra_real_csv}")
     print(f"   lr {args.lr} | epochs {args.epochs} | device {device} | FULL fine-tune")
     print("=" * 60)
 
@@ -212,13 +261,19 @@ def main() -> None:
     val_dl = DataLoader(RealCropDataset(real_val, False), batch_size=args.batch,
                         shuffle=False, collate_fn=collate_fn, num_workers=nw)
 
-    # build model + load synthetic base weights (full fine-tune)
-    model = CRNN(IMG_H, IMG_W, len(CHARSET) + 1, N_HIDDEN).to(device)
+    # build model + load synthetic base weights (full fine-tune).
+    # Way 1 (--stn): add the learnable straightening layer. The base weights have no
+    # STN params, so load them non-strict — the STN stays at its identity init (a
+    # no-op) and learns to un-rotate crops from the CTC loss during training.
+    model = CRNN(IMG_H, IMG_W, len(CHARSET) + 1, N_HIDDEN, use_stn=args.stn).to(device)
     try:
         state = torch.load(str(args.base), map_location=device, weights_only=True)
     except Exception:
         state = torch.load(str(args.base), map_location=device)
-    model.load_state_dict(state)
+    missing, _ = model.load_state_dict(state, strict=False)
+    if args.stn:
+        print(f"[stn] straightening layer ON ({sum(1 for m in missing if m.startswith('stn.'))} "
+              "new STN params start at identity)")
 
     criterion = nn.CTCLoss(blank=BLANK, zero_infinity=True)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
@@ -254,12 +309,12 @@ def main() -> None:
               f"val CER {vcer*100:.2f}% | val word-acc {vacc*100:.2f}%")
         if vcer < best_cer:
             best_cer = vcer
-            torch.save(model.state_dict(), OUT)
-            print(f"    [saved] best val CER {vcer*100:.2f}% -> {OUT.name}")
+            torch.save(model.state_dict(), out_path)
+            print(f"    [saved] best val CER {vcer*100:.2f}% -> {out_path.name}")
 
     print("-" * 60)
     print(f"Done. Best real-val CER: {best_cer*100:.2f}% (was {base_cer*100:.2f}%)")
-    print(f"Weights -> {OUT}")
+    print(f"Weights -> {out_path}")
     print("\nNow measure on the HELD-OUT test set:")
     print("  python scripts/recognition/evaluate_crnn_on_real.py --split test "
           "--weights models/recognition/crnn_finetuned.pth --tag finetuned")

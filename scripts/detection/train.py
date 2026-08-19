@@ -66,9 +66,16 @@ def run_training(model_name: str, batch: int, args, amp: bool) -> object:
         amp=amp,               # mixed precision — disable if cuDNN errors
         workers=args.workers,
         project=str(RUNS_DIR),
-        name=RUN_NAME,
+        name=args.name,
         exist_ok=True,
         verbose=True,          # epoch-by-epoch loss + mAP printout
+        # ROTATION-INVARIANCE augmentation (MODEL_IMPROVEMENT_PLAN Step 4).
+        # Default 0.0 = the original behaviour (upright only). Pass --degrees 180
+        # --flipud 0.5 to train a detector that finds plates at ANY angle: the image
+        # (and its boxes) are randomly rotated up to +-degrees and flipped vertically,
+        # so the model sees plates at every orientation instead of only upright.
+        degrees=args.degrees,
+        flipud=args.flipud,
     )
 
 
@@ -80,7 +87,7 @@ def resume_training(args) -> object:
         torch.backends.cudnn.benchmark = False
     except Exception:
         pass
-    last = RUNS_DIR / RUN_NAME / "weights" / "last.pt"
+    last = RUNS_DIR / args.name / "weights" / "last.pt"
     if not last.exists():
         raise SystemExit(f"[X] No checkpoint to resume from at {last}")
     print(f"Resuming from checkpoint: {last}")
@@ -104,6 +111,15 @@ def main() -> None:
                         help="Disable mixed precision (fixes some cuDNN crashes).")
     parser.add_argument("--resume", action="store_true",
                         help="Resume the interrupted run from its last checkpoint.")
+    parser.add_argument("--degrees", type=float, default=0.0,
+                        help="max random rotation in degrees (180 = any angle). "
+                             "0 = original upright-only behaviour.")
+    parser.add_argument("--flipud", type=float, default=0.0,
+                        help="probability of a vertical flip (0.5 helps upside-down).")
+    parser.add_argument("--name", default=RUN_NAME, help="run folder name under runs/detect/")
+    parser.add_argument("--out", type=Path, default=WEIGHTS_OUT / "best.pt",
+                        help="where to copy the best weights. Use a NEW name (e.g. "
+                             "models/detection/best_rot.pt) to keep best.pt intact.")
     parser.set_defaults(amp=True)
     args = parser.parse_args()
 
@@ -129,7 +145,14 @@ def main() -> None:
     print("=" * 60)
     print("Expected: mAP50 ~0.82-0.90, ~2-4h on GPU. Let it run.\n")
 
-    # --- train (with resume + auto-fallbacks for OOM and cuDNN crashes) ---
+    # --- train (with resume) ---
+    # NOTE on recovery: a GPU crash MID-TRAINING (cuDNN stream-mismatch, OOM)
+    # corrupts the CUDA context and does NOT free the card's memory, so retrying in
+    # the SAME process always fails with a second "out of memory" (this bit us once).
+    # The only reliable recovery is a FRESH process — either --resume from the
+    # checkpoint, or rerun with the safer flags below. So on a crash we save nothing
+    # to chance: print the exact recovery command and exit, instead of a doomed
+    # in-process retry.
     if args.resume:
         results = resume_training(args)
     else:
@@ -137,34 +160,34 @@ def main() -> None:
             results = run_training(args.model, args.batch, args, amp=args.amp)
         except (RuntimeError, Exception) as exc:  # noqa: BLE001
             msg = str(exc).lower()
-
-            def _empty_cache():
-                try:
-                    import torch
-                    torch.cuda.empty_cache()
-                except Exception:
-                    pass
-
-            if "out of memory" in msg and args.batch > 8:
-                print(f"\n[!] CUDA out of memory at batch {args.batch}. "
-                      "Retrying at batch 8...\n")
-                _empty_cache()
-                results = run_training(args.model, 8, args, amp=args.amp)
-            elif "cudnn" in msg or "stream_mismatch" in msg:
-                print("\n[!] cuDNN crash detected. Retrying with mixed "
-                      "precision DISABLED (amp=False) at batch 8...\n")
-                _empty_cache()
-                results = run_training(args.model, min(args.batch, 8),
-                                       args, amp=False)
-            else:
-                print(f"\n[X] Training failed: {exc}")
-                raise
+            ckpt = RUNS_DIR / args.name / "weights" / "last.pt"
+            resumable = ckpt.exists()
+            print(f"\n[X] Training GPU-crashed: {exc}")
+            print("-" * 60)
+            if "cudnn" in msg or "stream_mismatch" in msg:
+                print(" Cause: a flaky Windows-laptop-GPU cuDNN error (intermittent,")
+                print("        NOT your data). Mixed precision is the usual trigger.")
+            elif "out of memory" in msg:
+                print(" Cause: the 4 GB GPU ran out of memory.")
+            print(" A crashed run can't be retried in THIS process (its GPU memory")
+            print(" is not released). Start a FRESH process with one of these:\n")
+            if resumable:
+                print(f"   # continue from the last checkpoint (keeps progress):")
+                print(f"   python {Path(__file__).name} --resume --name {args.name}\n")
+            print(f"   # or restart crash-safe (mixed precision off, smaller batch):")
+            print(f"   python {Path(__file__).name} --model {args.model} "
+                  f"--degrees {args.degrees:g} --flipud {args.flipud:g} "
+                  f"--epochs {args.epochs} --name {args.name} --out {args.out} "
+                  f"--no-amp --batch 8")
+            print("-" * 60)
+            sys.exit(1)
 
     # --- locate + copy best.pt ---
-    run_dir = Path(getattr(results, "save_dir", RUNS_DIR / RUN_NAME))
+    run_dir = Path(getattr(results, "save_dir", RUNS_DIR / args.name))
     best = run_dir / "weights" / "best.pt"
     if best.exists():
-        dest = WEIGHTS_OUT / "best.pt"
+        dest = args.out
+        dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(best, dest)
         print(f"\n[OK] best weights -> {dest}")
     else:

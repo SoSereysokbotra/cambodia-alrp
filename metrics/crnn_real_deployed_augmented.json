@@ -1,0 +1,10 @@
+{
+  "tag": "deployed_augmented",
+  "split": "test",
+  "weights": "crnn_finetuned.pth",
+  "n": 149,
+  "cer": 0.0511,
+  "word_accuracy": 0.8054,
+  "mean_confidence": 0.9429,
+  "below_gate_pct": 0.0
+}

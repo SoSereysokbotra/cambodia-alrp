@@ -233,9 +233,12 @@ normally *wider* than the Khmer province line. Switching to the scale-invariant
 | Flag precision | 45.45% |
 | Dominant reason | weak-number-alignment (21), uncertain-province (1) |
 
-**Addresses the 1.2 cross-plate finding:** a number misread as another plate's
-number will usually pair with a *different* province, which 2.2's signals (and the
-composed-text whitelist) help surface. **Honest limitation:** precision is moderate
+**~~Addresses the 1.2 cross-plate finding~~ — WRONG, corrected 2026-07-23.** This
+claim does not hold: `process_frame` checks `is_reg` *before* the consistency
+branch, so a read that exact-matches a *different* registered plate is ALLOWED and
+never reaches 2.2. It never was a false-open mitigation. 2.2 was subsequently
+measured against province ground truth (lift **0.98×** — no better than chance) and
+**disabled**; see `docs/IMPROVEMENT_PLAN_V2.md` §6.4. **Honest limitation:** precision is moderate
 and the signal targets province/pairing, so full validation needs province ground
 truth for the test frames (same gap flagged in 1.1). The noise is low-harm — 2.2
 only converts DENYs of *unregistered* reads into REVIEWs; registered cars are

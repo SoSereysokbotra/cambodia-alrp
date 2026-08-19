@@ -150,7 +150,8 @@ def load_province_gt(path: Path | None) -> tuple[dict[str, int], int]:
 # --------------------------------------------------------------------------- #
 # isolated ALPRSystem (temp DB + temp photo/output dir)
 # --------------------------------------------------------------------------- #
-def make_isolated_system(tmp: Path, gate_overrides: dict | None = None):
+def make_isolated_system(tmp: Path, gate_overrides: dict | None = None,
+                         crnn_weights: str | None = None):
     """Instantiate ALPRSystem against a temp config so the real plates.db and
     photos/ are never written to. Returns the ALPRSystem.
 
@@ -163,6 +164,8 @@ def make_isolated_system(tmp: Path, gate_overrides: dict | None = None):
     cfg = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
     if gate_overrides:
         cfg.setdefault("gate", {}).update(gate_overrides)
+    if crnn_weights:
+        cfg["crnn_weights"] = crnn_weights
     cfg["db_path"] = str(tmp / "bench.db")
     cfg.setdefault("output", {})
     cfg["output"]["photo_dir"] = str(tmp / "photos")
@@ -196,6 +199,9 @@ def main() -> None:
                     help="PLAN_V2 Phase 1: override gate.format_validation for this run")
     ap.add_argument("--dump", type=str, default=None,
                     help="write per-frame records to this JSON (for offline failure analysis)")
+    ap.add_argument("--crnn-weights", type=str, default=None,
+                    help="evaluate a CANDIDATE CRNN without touching the config "
+                         "(PLAN_V2 Phase 5 A/B)")
     ap.add_argument("--confidence-mode", choices=["mean", "min", "geometric"],
                     default=None,
                     help="PLAN_V2 Phase 2: override gate.confidence_mode for this run")
@@ -228,7 +234,9 @@ def main() -> None:
         overrides = overrides or None
         if overrides:
             print(f"[bench] overrides: {overrides}")
-        system = make_isolated_system(tmp, overrides)
+        if args.crnn_weights:
+            print(f'[bench] candidate CRNN: {args.crnn_weights}')
+        system = make_isolated_system(tmp, overrides, args.crnn_weights)
         conf_threshold = system.crnn_conf_threshold      # REC-005 gate (0.70)
         from recognition.province_map import compose_plate
 
@@ -255,6 +263,9 @@ def main() -> None:
                 "crnn_conf": pl.get("crnn_confidence", 0.0),
                 "action": pl.get("action", ""),
                 "consistency_reasons": pl.get("consistency_reasons", []),
+                # raw 2.2 signals, for offline threshold sweeping
+                "match_align": pl.get("match_align"),
+                "province_confidence": pl.get("province_confidence"),
             })
             if i % 25 == 0:
                 print(f"  processed {i}/{len(rows)} ...")
@@ -362,7 +373,13 @@ def main() -> None:
         # 2.2 flags shows up as a REVIEW it converted from a would-be DENY. Cross-
         # tab the flag against number correctness: a flag on a WRONG read is a good
         # catch; a flag on a CORRECT read is an over-trigger (lost throughput).
-        flagged = [r for r in det_recs if r.get("consistency_reasons")]
+        # Only CONFIDENT reads are counted: `process_frame` checks REC-005 BEFORE
+        # the 2.2 branch, so a low-confidence read goes to REVIEW regardless and the
+        # flag changes nothing for it. Including those inflated the reported
+        # precision (45.45% over all 22 flagged vs 20.0% over the 15 where 2.2
+        # actually decides the outcome).
+        flagged = [r for r in det_recs if r.get("consistency_reasons")
+                   and r.get("crnn_conf", 0.0) >= conf_threshold]
         flag_wrong = sum(1 for r in flagged if r["pred_number"] != r["gt_number"])
         flag_right = len(flagged) - flag_wrong
         reason_counts: dict[str, int] = {}
@@ -410,6 +427,8 @@ def main() -> None:
         print("         become REVIEW_REQUIRED, so it adds ZERO false-accept risk.")
         print("-" * 62)
         print(" 2.2 CONSISTENCY FLAGS (province<->number), whitelist empty")
+        print("   counted over CONFIDENT reads only — the population where the")
+        print("   flag actually decides DENY vs REVIEW (REC-005 fires first otherwise)")
         print(f"   reads flagged -> REVIEW       : {len(flagged)}/{len(det_recs)}")
         print(f"     on a WRONG number (catch)   : {flag_wrong}")
         print(f"     on a CORRECT number (noise) : {flag_right}")

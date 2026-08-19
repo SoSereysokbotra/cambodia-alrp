@@ -222,6 +222,10 @@ def main() -> None:
     win = "ALPR Control Dashboard"
     cv2.namedWindow(win)
     cv2.setMouseCallback(win, on_mouse)
+    # LIVE de-duplication: one car in view for a few seconds is ~40 frames. Without
+    # this flag process_frame logs EVERY frame, flooding the audit log with dozens
+    # of rows for a single plate. run_video() sets it; this custom loop must too.
+    system._live_dedup = True
     reader = RTSPReader(source).start()
     frame_i = 0
     print("Dashboard running — keys: [o] manual open  [e] e-stop  [q] quit")

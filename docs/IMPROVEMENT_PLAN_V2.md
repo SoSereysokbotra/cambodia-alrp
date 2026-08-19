@@ -87,8 +87,8 @@ impossible format — this is the same population as the benchmark's
 | **2** | Confidence recalibration ✅ **DONE 2026-07-23 — hypothesis refuted, default kept** | Low | No | No | Makes the REC-005 gate mean something |
 | **3** | Visit-level benchmark ✅ **DONE 2026-07-23** | Medium | No | No | Makes Phase 4 measurable |
 | **4** | ~~Multi-frame read fusion~~ ❌ **CANCELLED — refuted by Phase 3** | Medium | No | No | ~~Biggest training-free accuracy gain~~ — ceiling is 2.1 pp; both implementations lose |
-| **5** | Active-learning harvest ⬅ **now the top priority** | Medium | Yes (mined) | **Yes** | Extends the proven CER curve; the only lever left |
-| **6** | Deployment hardening | Low–Medium | No | No | Removes the "not for real deployment" asterisk |
+| **5** | Active-learning harvest ✅ **TOOLING DONE 2026-07-23** — fine-tune ran, candidate not shipped | Medium | Yes (mined) | **Yes** | Extends the proven CER curve; the only lever left |
+| **6** | Deployment hardening — 6.1 auth ✅ **DONE**, 6.4 2.2-retune ✅ **DONE (disabled)**; 6.2 live camera + 6.3 hard-condition capture remain | Low–Medium | No | No | Removes the "not for real deployment" asterisk |
 
 **Phases 0–4 require no new data and no GPU training.** Training re-enters only
 at Phase 5.
@@ -717,11 +717,175 @@ roadmap analysis, the RTX 3050 (4 GB) is sufficient for a fine-tune at this scal
 grows past ~2,000 crops, and even then bring the weights back to Windows
 (DEV-001). **Train big, deploy small: the model still has to run at the gate.**
 
-### Gate — do not start Phase 6 until
-- [ ] New CER recorded against the **unchanged** 149-frame test set
-- [ ] Both frame-level and visit-level benchmarks re-run
-- [ ] False-accept rate still 0
-- [ ] Leakage check documented — state explicitly how test overlap was excluded
+### ✅ TOOLING DONE (2026-07-23) — but the plan pointed at the wrong pool
+
+Implemented as `scripts/recognition/harvest_active.py`
+(`--scan` / `--sheets` / `--merge --apply` / `--check-mix`).
+
+**The pool this phase was written against does not support a fine-tune.** The plan
+said to mine `photos/` + `plates.db` ("7,341 audit reads, 6,122 evidence photos").
+Phase 3 measured that pool:
+
+- after visit de-duplication it holds **~6 distinct vehicles** (one is 110 of 140 visits),
+- 226 visits are the camera pointed at a **phone screen**, not a vehicle,
+- and decisively: **none of those 6 vehicles appear in the 149-frame test set**, so
+  any gain from labelling them would be **unmeasurable**.
+
+It is development testing, not gate traffic. Labelling it would add hundreds of
+near-duplicates of the same few plates.
+
+**The pool that does support a fine-tune was already on disk:**
+
+| Split | crops | labelled | unlabelled |
+|-------|-------|----------|-----------|
+| train | 1803 | 473 | **1330** |
+| valid | 643 | 0 | **643** |
+| test | 436 | 149 | 287 — **never touched** |
+
+**1,973 unlabelled real number-crops** from the diverse Roboflow dataset, already
+extracted. This is the same kind of data whose labelling drove the CER curve
+94.89% → 25.93% → 20.32% → 10.21% (0 → 143 → 324 → 473 labels), which has never
+plateaued.
+
+### Active-learning ranking — and an unplanned synergy with Phase 1
+
+Ranking the 1,973 unlabelled crops by how much the model is struggling:
+
+| Priority | Reason | Count | Share |
+|---|---|---|---|
+| 1 | **format-invalid** (Phase 1 grammar proves the read is wrong) | **604** | 30.6% |
+| 2 | low-confidence (below the REC-005 gate) | **11** | 0.6% |
+| 3 | mid-confidence | 159 | 8.1% |
+| — | model-confident + valid | 1199 | 60.8% |
+
+**604 format-invalid versus 11 low-confidence.** Confidence — the classic
+active-learning signal — finds almost nothing, because (as Phase 2 established) this
+model's errors are *confident*, not uncertain. **Phase 1's grammar, built for the
+gate, turned out to be the selection signal Phase 5 needed.** That synergy was not
+planned.
+
+### Labelling batch actually produced
+84 top-priority crops transcribed by eye → **48 labels (57% yield)**, all 48 passing
+the Phase 1 grammar as a self-check. Merged via `--merge --apply`:
+**473 → 521 train labels (+10.1%)**, 670 total.
+
+The 36 rejects are informative: many priority-1 crops are format-invalid because the
+**crop itself is bad** — a radiator grille, motion blur, or in two cases an *"ANCHOR"
+beer advertisement* — not because a readable plate was misread. So the 615 headline
+overstates the usable yield; expect ~57%, i.e. **~350 usable labels** in the queue.
+
+**Split breakdown (matters more than it looks):** the harvest draws from *both*
+train and valid, so the 48 labels landed as **35 train + 13 valid**. But
+`finetune_crnn.py` selects rows with `--match "/train/"`, so **only the 35 train
+labels were actually used for training**:
+
+| | before | after | used by the fine-tune |
+|---|---|---|---|
+| train | 473 | **508** (+7.4%) | yes |
+| valid | 0 | 13 | **no** |
+| test | 149 | 149 | never |
+
+So the effective training-set growth was **+7.4%**, not the +10.1% that the raw
+"+48 labels" figure suggests. Worth remembering when planning the next batch: about
+a quarter of harvested labels land outside the training split.
+
+### Honest expectation for this fine-tune
++7.4% labels is a much smaller step than the historical ones (324 → 473 was +46%
+and bought −10 pp CER). A gain this size may well be **within run-to-run variance**.
+The run is being done to *measure* that, not because a large gain is expected — and
+it writes to `models/recognition/crnn_ft_phase5.pth` so the deployed
+`crnn_finetuned.pth` stays intact for an A/B. (`finetune_crnn.py` gained an `--out`
+flag for this; it previously always overwrote the deployed weights.)
+
+### Fine-tune result (2026-07-23) — candidate NOT shipped
+
+50 epochs, ~1 h on the RTX 3050. Internal val CER reached **7.05%** (from a 91.59%
+synthetic baseline) — but the internal val split is carved from the *train* labels
+and is not comparable across runs. The decisive number is the **unchanged 149-frame
+test set**:
+
+| Metric | Deployed `crnn_finetuned.pth` | Candidate `crnn_ft_phase5.pth` |
+|--------|------------------------------|-------------------------------|
+| CER (isolated) | 10.21% | **10.11%** |
+| **Word accuracy (isolated)** | **72.48%** | **70.47%** |
+| Number e2e accuracy | **67.79%** (101/149) | 66.44% (99/149) |
+| Number CER (e2e) | 15.15% | **14.84%** |
+| **Composed exact-match** | **68.71%** | **67.35%** |
+| Confident auto-open | **100**/143 | 99/143 |
+| False-accept rate | 0.00% | 0.00% |
+
+**CER improved fractionally; every decision-relevant metric got slightly worse.**
+CER is a character metric, but the gate needs an *exact* match — so word accuracy and
+composed exact-match are what count, and both fell.
+
+**Verdict: keep the deployed weights.** The candidate stays on disk as
+`models/recognition/crnn_ft_phase5.pth` for reference; it is not referenced by any
+config.
+
+**Read this honestly:** a 2-frame difference on n=149, from one seed, is *within
+run-to-run variance*. The correct claim is **not** "the new model is worse" — it is
+"**there is no evidence it is better**", and swapping a deployed model requires
+evidence of improvement. The prediction made before the run — that a single-digit
+percentage increase in labels would land inside the noise — is what happened.
+
+**What this quantifies:** the labelling effort actually required. The historical
+steps that moved CER were **+46%** label increases (324 → 473 bought −10 pp). This
+was **+7.4%** and bought nothing. Reaching the next real improvement needs on the
+order of **+200–350 train labels**, which is most of the usable harvest queue (~350
+after the 57% yield rate, and remembering ~a quarter land in valid rather than
+train) — roughly **8–10 more labelling batches** of the size done here.
+
+### Labelling progress (cumulative — do NOT retrain until the threshold)
+
+| Batch | Crops reviewed | Labels kept | Yield | Train labels after |
+|-------|---------------|-------------|-------|--------------------|
+| 1 | 84 | 48 (35 train + 13 valid) | 57% | 508 |
+| 2 | 112 (queue 84–195) | 79 (3 dropped as unrepresentable) | 73% | 566 (+93, +19.7%) |
+| 3 | 84 (queue 196–279) | 59 (1 dropped) | 71% | 606 (+133, +28.1%) |
+| 4 | 84 (queue 280–363) | 53 (1 dropped) | 64% | 642 (+169, +35.7%) |
+| 5 | 84 (queue 364–447) | 48 (3 dropped) | 61% | **679 (+206 vs 473, +43.6%)** |
+
+**Threshold cleared at batch 5.** Cumulative growth is now **+206 train labels
+(+43.6%)** — on par with the historical **324 → 473 (+46%)** step that bought −10 pp
+CER, which is exactly why a fine-tune is finally worth running. A second fine-tune
+(`crnn_ft_phase5b.pth`) is running on the 679-label set; result recorded below when it
+lands. The deployed weights stay untouched until it clears the same A/B bar Phase 5's
+first candidate failed.
+
+**Do not fine-tune between batches.** Phase 5 established that a step this size lands
+in run-to-run noise; retraining after every batch just reproduces that null result and
+burns an hour each time. This campaign labelled 5 batches (287 kept of 448 reviewed,
+64% mean yield) and trained **once** at the end.
+
+**Recurring drop reason across the campaign:** ~8% of otherwise-legible plates are
+**vanity/special plates with a `.` separator** (`JJ.88`, `DR.GLOW`, `T.N.9889`,
+`HSR.9898`, `BNR.1616`, `GUD.LCUK`, `SELA.GTR`, `KEO.NARA`, `MPA.3689`, `M.SAM99`…).
+The CRNN charset has no dot, so these are unrepresentable and were dropped rather than
+mislabelled with a dash. Letter-only vanity plates (`SAMNANG9`, `WENVANNA`, `LUCKY`,
+`SINGLE`, `KANHA585`, `KUNTHY33`, `VANNRIYA`, `AMATAK99`) were kept — they pass the
+grammar and the charset represents them. **If these dotted plates matter at the target
+gate, the fix is a charset+grammar change, not more labelling** — noting it here as a
+scoped follow-up.
+
+**Batch-2 note — the CRNN charset can't represent dots.** Three legible plates were
+*dropped*, not labelled: `JJ.88` and `DR.GLOW` (dot separator — `.` is not in
+`CHARSET`, so a label would train a wrong mapping) and a bare `168` (ambiguous
+3-digit). `SAMNANG9` and other letter-only vanity plates were kept — they are in the
+charset and pass the grammar. Yield rose 57% → 73% because batch 2 reached into the
+mid-confidence band, where crops are less often pure garbage than the priority-1 tail.
+
+### Gate — PASSED as a decision not to ship
+- [x] New CER recorded against the **unchanged** 149-frame test set (10.11%)
+- [x] Frame-level benchmark re-run on the candidate; visit-level unaffected
+      (it replays recorded reads from the deployed model, not the candidate)
+- [x] False-accept rate still 0.00% for both
+- [x] **Leakage check documented.** `data/crnn_crops/test/` is excluded
+      unconditionally by `HARVEST_SPLITS`; `--merge` refuses any test-split row and
+      `--check-mix` re-verifies (0 leaked). Separately, the 640×640 Roboflow replays
+      were excluded from the Phase 3 visit corpus for the same reason.
+- [x] **Selection-bias guard.** Hard cases are 6.7% of the merged train set (`--check-mix`
+      warns above 50%), so they are mixed into the existing labels rather than
+      replacing them.
 
 ---
 
@@ -730,10 +894,47 @@ grows past ~2,000 crops, and even then bring the weights back to Windows
 Deferred deliberately until the accuracy work lands, because none of it changes
 the metric that decides whether the gate opens.
 
-### 6.1 Admin panel authentication
-`scripts/system/admin_web.py` currently has none. Acceptable for a LAN demo,
-**not** acceptable for anything beyond it. A session cookie plus a single admin
-password is roughly an hour's work and removes the standing asterisk.
+### 6.1 Admin panel authentication ✅ **DONE 2026-07-23**
+
+`scripts/system/admin_web.py` had **no authentication at all** — anyone on the LAN
+could add, suspend or delete whitelist plates, i.e. decide who the gate opens for.
+
+**Implemented (stdlib only, no new dependency):**
+- **PBKDF2-HMAC-SHA256**, 200k iterations, per-install random salt. Only the hash is
+  stored, in `configs/admin_auth.json` (**added to `.gitignore`**). Plaintext is never
+  written to disk. Set it with `--set-password` (prompts, or reads
+  `ALPR_ADMIN_PASSWORD`); minimum 8 characters.
+- **Server-side sessions** — a `secrets.token_urlsafe(32)` in an `HttpOnly`,
+  `SameSite=Strict` cookie, 8-hour expiry. Nothing sensitive is stored in the browser,
+  and `SameSite=Strict` blocks cross-site POSTs to the mutating routes.
+- **Constant-time verification** (`hmac.compare_digest`) so timing can't leak the hash.
+- **Brute-force lockout** — 5 failures per client IP, then 5 minutes locked, and a
+  *correct* password is still refused while locked.
+- **Fails closed on the mutating routes**: an unauthenticated POST gets a flat `401`
+  rather than a redirect, so a script can't be bounced into a login page and retried.
+- **Refuses to start without a password.** `--no-auth` exists for a localhost demo but
+  **refuses to bind to a non-loopback address**, so the panel cannot be exposed
+  unauthenticated by mistake.
+- Defensive headers on every response: `X-Frame-Options: DENY` (a framed DELETE button
+  is trivial clickjacking), `X-Content-Type-Options`, `Referrer-Policy`, `Cache-Control: no-store`.
+
+**Verified (9 checks, all passing):**
+
+| # | Check | Result |
+|---|-------|--------|
+| 1 | start with no password | refuses, prints instructions |
+| 2 | `--no-auth` with `--host 0.0.0.0` | refuses |
+| 3 | `GET /` with no session | login page |
+| 4 | **`POST /delete` with no session** | **401** |
+| 5 | `POST /login` wrong password | 401 |
+| 6 | `POST /login` correct | 303 + `HttpOnly; SameSite=Strict` cookie |
+| 7 | `GET /` with session | dashboard |
+| 8 | `GET /logout` | session invalidated |
+| 9 | 6 wrong logins, then the *correct* one | 429 — lockout holds |
+
+**Before first use:** run `python scripts/system/admin_web.py --set-password`. No
+password is currently set (the one used for testing was deleted), so the panel will
+refuse to start until you set one.
 
 ### 6.2 Live camera validation
 `camera_source` currently points at `http://10.45.245.88:8080/video` (an
@@ -750,11 +951,60 @@ current 473 crops, which are mostly easy daylight shots. Deliberately capture
 Needs a further CRNN fine-tune, so treat it as a repeat of Phase 5 with a
 different data source.
 
-### 6.4 Retune the 2.2 consistency check
-Flag precision swung 45% → 20% between runs — but the 20% figure came from the
-n=40 run (finding C), so it is sample noise, not a regression. Retune
-`gate.number_alignment_min` against the Phase 0 n=149 baseline **with province
-ground truth**, which is the validation 2.2 was always missing.
+### 6.4 Retune the 2.2 consistency check ✅ **DONE 2026-07-23 — turned OFF**
+
+Retuned against the Phase 0 baseline **with province ground truth** — the validation
+2.2 was always missing. The conclusion is that it cannot be usefully tuned, because
+the signal carries no information.
+
+**1. The flag is no better than chance.** Measured over the 117 confident reads that
+have province ground truth (the population where 2.2 actually decides DENY vs REVIEW):
+
+| | |
+|---|---|
+| base rate of wrong reads | 17/117 = **14.5%** |
+| precision of the 2.2 flag | 2/14 = **14.3%** |
+| **lift over random selection** | **0.98×** |
+
+Identical against number-only and composed correctness.
+
+**2. `align` is binary, not continuous — there is no threshold to tune.**
+
+| align value | reads |
+|---|---|
+| 0.0 (no overlap at all) | 17 |
+| < 0.25 | 4 |
+| ≥ 0.75 (contained) | 122 |
+
+Nothing falls between 0.25 and 0.75, so **every threshold from 0.05 to 0.75 produces
+exactly 14 flags and identical behaviour.** The swept parameter never mattered.
+
+**3. The province branch is effectively dead.** `province_confidence < 0.55` fires on
+**1 of 143** reads (minimum observed 0.399).
+
+**4. The reported 45.45% precision was an artefact of the instrument.**
+`process_frame` checks REC-005 *before* the 2.2 branch, so a low-confidence read goes
+to REVIEW regardless and the flag changes nothing for it. The benchmark was counting
+those: 22 flagged / 45.45% precision over all detected reads, versus **15 flagged /
+20.0%** over the confident reads where 2.2 decides the outcome. `benchmark_composed.py`
+now counts only the confident population.
+
+**Decision: `gate.consistency_check: false`.** Cost of leaving it on was ~10% of
+confident reads (12 per 117) — unregistered vehicles sent for a human REVIEW instead
+of a clean DENY, for no benefit. Accuracy and safety metrics are byte-identical with
+it off (composed 68.71%, FAR 0.00%, 100 auto-opens); only the spurious flags
+disappear (22 → 0). One line to revert; the thresholds are kept in the config.
+
+**Correction to a claim in `IMPROVEMENT_ROADMAP.md`:** that doc states 2.2
+"addresses the 1.2 cross-plate finding". **It cannot.** `process_frame` checks
+`is_reg` *before* the consistency branch, so a read that exact-matches a different
+registered plate is ALLOWED and never reaches 2.2. It never was a false-open
+mitigation. (The `k`-agreeing-frames idea salvaged from Phase 4 remains the only
+identified one.)
+
+**Caveat:** n=14 flags is small, so the 0.98× lift has a wide interval. But the point
+estimate sits exactly on the base rate, no threshold changes the outcome, and the
+underlying signal is binary — three independent reasons not to keep it.
 
 ---
 
@@ -796,7 +1046,7 @@ two were refuted by their own gates** — which is the plan working as intended.
 | 2 Confidence recalibration | ❌ **Refuted.** `min` is *worse* than `mean`; all modes within noise. Default unchanged |
 | 3 Visit benchmark | ✅ Built — and it refuted Phase 4 |
 | 4 Multi-frame fusion | ❌ **Cancelled.** Ceiling 2.1 pp; both implementations lose to current logic |
-| 5 Active-learning harvest | ⬅ **Now the top priority** |
+| 5 Active-learning harvest | ✅ Tooling built + 48 labels merged. Fine-tune ran: **no evidence of improvement, candidate not shipped.** Quantified the real cost: **+200–350 labels needed**, not +48 |
 
 **The consistent signal across all four phases: the CRNN itself is the binding
 constraint, and no amount of decode-time or aggregation-time cleverness moves it.**

@@ -87,6 +87,14 @@ class ALPRSystem:
         # impossible shape invalidates the READ itself, before any gate logic.
         self.format_validation = bool(
             cfg.get("gate", {}).get("format_validation", False))
+        # MODEL_IMPROVEMENT_PLAN Step 5: any-angle reading. When on, each frame is
+        # first rotated to the orientation where the plate reads cleanest (tries
+        # 0/90/180/270, judged by CRNN confidence x plate-format validity), so a
+        # sideways/upside-down plate is normalised to upright before the normal
+        # pipeline. Off by default — a real gate sees upright plates and this costs
+        # ~4x detection per frame.
+        self.orientation_search = bool(
+            cfg.get("gate", {}).get("orientation_search", False))
         # PLAN_V2 Phase 2: how the per-character confidences reduce to one number.
         self.confidence_mode = str(
             cfg.get("gate", {}).get("confidence_mode", "mean")).lower()
@@ -195,6 +203,24 @@ class ALPRSystem:
         self._sampled_frames = 0
         self._last_alert: dict[str, float] = {}   # alert-type -> last time (dedupe)
 
+        # --- Google Drive background uploader (auto-upload evidence photos) --- #
+        self._gdrive = None
+        gdrive_cfg = cfg.get("gdrive", {}) or {}
+        if gdrive_cfg.get("enabled", False):
+            try:
+                from utils.gdrive_storage import GDriveStorage
+                self._gdrive = GDriveStorage(gdrive_cfg, PROJECT_ROOT)
+                if self._gdrive.authenticate():
+                    self._gdrive.ensure_folder_tree()
+                    self._gdrive.start_background_uploader()
+                    self.logger.info("Google Drive uploader active.")
+                else:
+                    self.logger.warning("Google Drive auth failed — uploads disabled.")
+                    self._gdrive = None
+            except Exception as exc:
+                self.logger.warning("Google Drive init failed: %s — uploads disabled.", exc)
+                self._gdrive = None
+
     # ------------------------------------------------------------------ #
     @staticmethod
     def _load_config(config_path: str) -> dict:
@@ -290,8 +316,48 @@ class ALPRSystem:
         return "ENTRY_ALLOWED", "ENTRY"
 
     # ------------------------------------------------------------------ #
+    def _orient_upright(self, frame):
+        """Step 5: rotate `frame` to the orientation where the plate reads best.
+
+        Tries 0/90/180/270, detects the number line and reads it at each, and keeps
+        the rotation whose read scores highest (CRNN confidence x plate-format
+        validity). The readers are excellent on upright crops and produce garbage
+        otherwise, so the correct-upright rotation wins. Returns the rotated frame
+        (unchanged if nothing reads, or if there is no number detector to judge with).
+        """
+        det = self.number_detector or self.detector
+        if det is None:
+            return frame
+        try:
+            from plate_format import is_valid
+        except Exception:
+            def is_valid(_s):
+                return True
+        best_k, best_score, best_ties0 = 0, -1.0, False
+        for k in range(4):
+            rf = np.ascontiguousarray(np.rot90(frame, k)) if k else frame
+            for d in det.detect(rf):
+                crop = d.get("crop")
+                if crop is None or not getattr(crop, "size", 0):
+                    continue
+                num, conf = self.reader.read(crop)
+                if not num:
+                    continue
+                score = conf * (1.0 if is_valid(num) else 0.25)
+                # Prefer the unrotated frame on a tie so 0deg (the common case) is
+                # never needlessly rotated.
+                if score > best_score or (score == best_score and k == 0 and not best_ties0):
+                    best_score, best_k = score, k
+                    best_ties0 = (k == 0)
+        return np.ascontiguousarray(np.rot90(frame, best_k)) if best_k else frame
+
+    # ------------------------------------------------------------------ #
     def process_frame(self, frame) -> dict:
         t0 = time.perf_counter()
+
+        # Step 5: normalise a rotated plate to upright before the normal pipeline.
+        if self.orientation_search and not self.assume_crop:
+            frame = self._orient_upright(frame)
 
         # Stage 1 — detection (or crop mode)
         t1 = time.perf_counter()
@@ -412,6 +478,10 @@ class ALPRSystem:
                 "number": number,
                 "is_registered": is_reg,
                 "consistency_reasons": consistency_reasons,   # ROADMAP 2.2
+                # Raw pairing quality behind the 2.2 flag. Exposed so the threshold
+                # can be swept offline against ground truth instead of guessed.
+                "match_align": (round(float(match_q["align"]), 4)
+                                if match_q and "align" in match_q else None),
                 "parking_event": parking_event,               # ENTRY / EXIT (parking mode)
                 "province_id": prov_id,
                 "province_confidence": (round(prov_conf, 4) if prov_conf is not None else None),
@@ -503,6 +573,11 @@ class ALPRSystem:
             tag = re.sub(r"[^0-9A-Za-z-]", "", plate.get("number") or "") or "UNREAD"
             path = self.photo_dir / f"plate_{ts}_{tag}.jpg"
             cv2.imwrite(str(path), annotated)
+            # Queue for Google Drive background upload (non-blocking)
+            if self._gdrive is not None:
+                auto = self.config.get("gdrive", {}).get("auto_upload", {})
+                if auto.get("photos", True):
+                    self._gdrive.queue_upload(path, "photos")
             try:
                 return path.relative_to(PROJECT_ROOT).as_posix()
             except ValueError:
@@ -538,22 +613,30 @@ class ALPRSystem:
     def _dedup_persist(self, p: dict, annotated, now: float) -> None:
         """Live: keep ONE audit row per car (per visit), upgraded to the best read.
 
-        A read whose text is within `dedup_merge_edits` of the current visit and
-        seen within `dedup_gap_sec` is the SAME car: it does not add a new row —
-        it only replaces the existing row if it's more confident. A different plate
-        (or a gap in time) starts a new visit / row. This turns the per-frame flood
-        into a single, correct entry that staff can act on.
+        A read is the SAME car as the current visit if it arrives within
+        `dedup_gap_sec` and its NUMBER is within `dedup_merge_edits` of the visit's
+        number. It does not add a new row — it only replaces the existing one if
+        more confident. A different number (or a time gap) starts a new visit / row.
+
+        Keying on the NUMBER, not the composed `province + number`, matters: the
+        province classifier flickers frame-to-frame on live video (the same plate is
+        read Mondul Kiri / Oddar Meanchey / ... in consecutive frames), while the
+        number is stable. Keying on the composed text let that flicker exceed
+        `dedup_merge_edits` and spawn a new row per frame — the exact per-plate flood
+        this de-dup exists to prevent. The highest-confidence frame still supplies the
+        stored province, so the kept row shows the most reliable composed read.
         """
         plate, conf = p["plate_text"], p["crnn_confidence"]
+        number = p.get("number") or plate            # stable identity for grouping
         v = self._visit
         same = (v is not None and (now - v["last_time"]) <= self.dedup_gap_sec
-                and self.database._edit_distance(plate, v["best_plate"])
+                and self.database._edit_distance(number, v["best_number"])
                 <= self.dedup_merge_edits)
         if not same:
             photo = self._save_photo(annotated, p)
             rid = self._log_one(p, photo)
-            self._visit = {"id": rid, "best_plate": plate, "best_conf": conf,
-                           "last_time": now, "photo": photo}
+            self._visit = {"id": rid, "best_plate": plate, "best_number": number,
+                           "best_conf": conf, "last_time": now, "photo": photo}
         else:
             v["last_time"] = now
             if conf > v["best_conf"] and v["id"] is not None:
@@ -568,7 +651,8 @@ class ALPRSystem:
                         (PROJECT_ROOT / v["photo"]).unlink(missing_ok=True)
                     except Exception:
                         pass
-                v.update(best_plate=plate, best_conf=conf, photo=photo)
+                v.update(best_plate=plate, best_number=number,
+                         best_conf=conf, photo=photo)
 
     # ------------------------------------------------------------------ #
     # Health monitoring & alerts (SRS Phase 9 — HLT-001/002/003, PERF-004)
@@ -814,6 +898,12 @@ class ALPRSystem:
         return health
 
     def close(self) -> None:
+        # Stop Google Drive background uploader gracefully
+        if self._gdrive is not None:
+            try:
+                self._gdrive.stop_background_uploader()
+            except Exception:
+                pass
         try:
             self.database.close()
         except Exception:

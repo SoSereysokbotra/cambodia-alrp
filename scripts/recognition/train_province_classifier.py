@@ -45,17 +45,39 @@ MEAN = [0.485, 0.456, 0.406]
 STD = [0.229, 0.224, 0.225]
 
 
-def make_loaders(batch: int, workers: int):
+def make_loaders(batch: int, workers: int, framing_aug: bool = True,
+                 rotate: bool = False):
     from torchvision import datasets, transforms
     from torch.utils.data import DataLoader
 
-    train_tf = transforms.Compose([
-        transforms.Resize((IMG_SIZE, IMG_SIZE)),
-        transforms.RandomRotation(6),
-        transforms.ColorJitter(0.2, 0.2, 0.2),
-        transforms.ToTensor(),
-        transforms.Normalize(MEAN, STD),
-    ])
+    if framing_aug:
+        # FRAMING-INVARIANCE augmentation (MODEL_IMPROVEMENT_PLAN Step 3).
+        # The classifier was fragile to WHERE the detector box lands: jittering the
+        # box flipped 70% of plates to 2-3 provinces (the live flicker). These
+        # transforms simulate that box variation at train time — random zoom/crop
+        # position (RandomResizedCrop) + random shift/scale/rotate (RandomAffine),
+        # with black fill so it also sees the box catching background — so the model
+        # learns the province regardless of exact framing.
+        # ROTATION (--rotate): degrees=180 makes the AFFINE rotate the crop to ANY
+        # angle, so the classifier reads the province upside-down / sideways too.
+        rot_deg = 180 if rotate else 6
+        train_tf = transforms.Compose([
+            transforms.RandomResizedCrop(IMG_SIZE, scale=(0.60, 1.0), ratio=(0.6, 1.7)),
+            transforms.RandomAffine(degrees=rot_deg, translate=(0.12, 0.12),
+                                    scale=(0.9, 1.1), fill=0),
+            transforms.ColorJitter(0.2, 0.2, 0.2),
+            transforms.ToTensor(),
+            transforms.Normalize(MEAN, STD),
+        ])
+    else:
+        # original (tight-crop) augmentation — kept so the old behaviour is reproducible
+        train_tf = transforms.Compose([
+            transforms.Resize((IMG_SIZE, IMG_SIZE)),
+            transforms.RandomRotation(6),
+            transforms.ColorJitter(0.2, 0.2, 0.2),
+            transforms.ToTensor(),
+            transforms.Normalize(MEAN, STD),
+        ])
     eval_tf = transforms.Compose([
         transforms.Resize((IMG_SIZE, IMG_SIZE)),
         transforms.ToTensor(),
@@ -93,7 +115,21 @@ def main() -> None:
     ap.add_argument("--pretrained", action="store_true",
                     help="Use ImageNet-pretrained ResNet18 (downloads weights).")
     ap.add_argument("--device", default=None)
+    ap.add_argument("--out", type=Path,
+                    default=OUT_DIR / "province_classifier_best.pth",
+                    help="weights output path. Pass a NEW name (e.g. "
+                         "province_classifier_framing.pth) to keep the deployed model "
+                         "intact while validating a candidate.")
+    ap.add_argument("--framing-aug", dest="framing_aug", action="store_true",
+                    default=True, help="framing-invariance augmentation (default ON)")
+    ap.add_argument("--no-framing-aug", dest="framing_aug", action="store_false",
+                    help="reproduce the old tight-crop augmentation")
+    ap.add_argument("--rotate", action="store_true",
+                    help="add full rotation (degrees=180) so the classifier reads "
+                         "upside-down / sideways provinces too")
     args = ap.parse_args()
+    out_pth = args.out
+    out_cfg = out_pth.with_name(out_pth.stem + "_config.json")
 
     if not (DATA_DIR / "train").is_dir():
         print(f"[X] {DATA_DIR/'train'} not found. Run build_province_dataset.py first.")
@@ -106,7 +142,9 @@ def main() -> None:
     print(f"   device {device} | epochs {args.epochs} | batch {args.batch}")
     print("=" * 60)
 
-    train_dl, val_dl, test_dl, train_ds = make_loaders(args.batch, args.workers)
+    print(f"   output {out_pth.name} | framing_aug={args.framing_aug} | rotate={args.rotate}")
+    train_dl, val_dl, test_dl, train_ds = make_loaders(args.batch, args.workers,
+                                                       args.framing_aug, args.rotate)
 
     # ImageFolder sorts class folders LEXICOGRAPHICALLY ('0','1','10',..,'2',..),
     # so its label index is NOT our numeric province id. Record the true mapping:
@@ -159,8 +197,9 @@ def main() -> None:
               f"| val_acc {val_acc*100:.2f}%")
         if val_acc > best_acc:
             best_acc = val_acc
-            torch.save(model.state_dict(), OUT_DIR / "province_classifier_best.pth")
-            (OUT_DIR / "province_classifier_config.json").write_text(json.dumps({
+            out_pth.parent.mkdir(parents=True, exist_ok=True)
+            torch.save(model.state_dict(), out_pth)
+            out_cfg.write_text(json.dumps({
                 "n_classes": n_head, "idx_to_class": idx_to_class,
                 "img_size": IMG_SIZE, "mean": MEAN, "std": STD, "arch": "resnet18",
             }, indent=2), encoding="utf-8")
@@ -169,8 +208,10 @@ def main() -> None:
     test_acc = evaluate(model, test_dl, device)
     print("-" * 60)
     print(f"Best val acc: {best_acc*100:.2f}% | Test acc: {test_acc*100:.2f}%")
-    print(f"Weights -> {OUT_DIR/'province_classifier_best.pth'}")
-    print("\nNext: python scripts/tools/test_phase3_complete.py")
+    print(f"Weights -> {out_pth}")
+    print(f"Config  -> {out_cfg}")
+    print("\nNext: validate framing-stability before/after:")
+    print(f"  python scripts/tools/test_province_stability.py --weights {out_pth} --config {out_cfg}")
 
 
 if __name__ == "__main__":

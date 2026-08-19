@@ -293,6 +293,34 @@ class PlateDatabase:
             print(f"[PlateDatabase] remove_plate error: {exc}")
             return False
 
+    def delete_read(self, read_id: int) -> str | None:
+        """Delete one audit row by id. Returns its photo_path (for optional file
+        cleanup by the caller), or None if the row didn't exist."""
+        try:
+            row = self.conn.execute(
+                "SELECT photo_path FROM plate_reads WHERE id = ?", (read_id,)).fetchone()
+            if row is None:
+                return None
+            self.conn.execute("DELETE FROM plate_reads WHERE id = ?", (read_id,))
+            self.conn.commit()
+            return row[0]
+        except sqlite3.Error as exc:
+            print(f"[PlateDatabase] delete_read error: {exc}")
+            return None
+
+    def clear_reads(self) -> list[str]:
+        """Delete ALL audit rows. Returns the photo_paths that were referenced (so
+        the caller can remove the evidence files). Does NOT touch the whitelist."""
+        try:
+            paths = [r[0] for r in self.conn.execute(
+                "SELECT photo_path FROM plate_reads WHERE photo_path IS NOT NULL").fetchall()]
+            self.conn.execute("DELETE FROM plate_reads")
+            self.conn.commit()
+            return [p for p in paths if p]
+        except sqlite3.Error as exc:
+            print(f"[PlateDatabase] clear_reads error: {exc}")
+            return []
+
     # ------------------------------------------------------------------ #
     # Audit log
     # ------------------------------------------------------------------ #

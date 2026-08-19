@@ -12,6 +12,24 @@ A browser UI (works from the PC or a phone on the same Wi-Fi) to:
 No web framework needed: Python stdlib http.server + jinja2 (already installed).
 Khmer text renders natively in the browser (unlike the OpenCV window).
 
+Authentication (PLAN_V2 Phase 6.1)
+----------------------------------
+This panel can add, suspend and DELETE whitelist entries — i.e. it controls who the
+gate opens for. It previously had no authentication at all, so anyone on the LAN
+could take it over. It now requires a password login and **refuses to start until
+one is set**:
+
+    python scripts/system/admin_web.py --set-password     # prompts, stores a hash
+    python scripts/system/admin_web.py                    # normal start
+
+The password is stored as a PBKDF2-HMAC-SHA256 hash (200k iterations, per-install
+random salt) in `configs/admin_auth.json`, which is gitignored — the plaintext is
+never written to disk or to the repo. Sessions are server-side random tokens in a
+cookie (HttpOnly, SameSite=Strict), so nothing sensitive lives in the browser.
+
+`--no-auth` exists for a localhost-only demo and prints a loud warning; it refuses
+to bind to a non-loopback address, so it cannot accidentally expose the panel.
+
 Run:
     python scripts/system/admin_web.py            # http://<this-pc-ip>:5000
     python scripts/system/admin_web.py --port 8000
@@ -19,9 +37,16 @@ Run:
 from __future__ import annotations
 
 import argparse
+import hashlib
+import hmac
+import json
+import os
+import secrets
 import socket
 import sys
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.cookies import SimpleCookie
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -38,6 +63,156 @@ from jinja2 import Template                       # noqa: E402
 from utils.database import PlateDatabase          # noqa: E402
 
 CONFIG = PROJECT_ROOT / "configs" / "system_config.yaml"
+AUTH_FILE = PROJECT_ROOT / "configs" / "admin_auth.json"   # gitignored
+
+# --------------------------------------------------------------------------- #
+# Authentication (PLAN_V2 Phase 6.1)
+# --------------------------------------------------------------------------- #
+PBKDF2_ITERATIONS = 200_000
+SESSION_COOKIE = "alpr_admin_session"
+SESSION_TIMEOUT_SEC = 8 * 3600         # re-login once a shift
+LOGIN_MAX_FAILURES = 5                 # per client IP
+LOGIN_LOCKOUT_SEC = 300                # then wait this long
+
+# token -> expiry epoch. In-memory on purpose: a restart invalidates every session,
+# and there is no session state worth persisting for a single-admin LAN panel.
+_SESSIONS: dict[str, float] = {}
+# client ip -> [failure count, first-failure epoch]
+_LOGIN_FAILURES: dict[str, list] = {}
+
+
+def hash_password(password: str, salt: bytes | None = None,
+                  iterations: int = PBKDF2_ITERATIONS) -> dict:
+    salt = salt or secrets.token_bytes(16)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+    return {"algorithm": "pbkdf2_sha256", "iterations": iterations,
+            "salt": salt.hex(), "hash": dk.hex()}
+
+
+def verify_password(password: str, record: dict) -> bool:
+    """Constant-time check so a timing side-channel can't leak the hash."""
+    try:
+        dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"),
+                                 bytes.fromhex(record["salt"]),
+                                 int(record["iterations"]))
+    except Exception:
+        return False
+    return hmac.compare_digest(dk.hex(), record.get("hash", ""))
+
+
+def load_auth() -> dict | None:
+    if not AUTH_FILE.exists():
+        return None
+    try:
+        rec = json.loads(AUTH_FILE.read_text(encoding="utf-8"))
+        return rec if rec.get("hash") and rec.get("salt") else None
+    except Exception as exc:
+        print(f"[admin] could not read {AUTH_FILE.name}: {exc}")
+        return None
+
+
+def set_password_cli() -> int:
+    """Prompt for a new admin password and store only its hash."""
+    import getpass
+    pw = os.environ.get("ALPR_ADMIN_PASSWORD")
+    if pw:
+        print("[admin] using ALPR_ADMIN_PASSWORD from the environment")
+    else:
+        pw = getpass.getpass("New admin password: ")
+        if pw != getpass.getpass("Repeat password: "):
+            print("[X] passwords do not match")
+            return 1
+    if len(pw) < 8:
+        print("[X] use at least 8 characters")
+        return 1
+    AUTH_FILE.parent.mkdir(parents=True, exist_ok=True)
+    AUTH_FILE.write_text(json.dumps(hash_password(pw), indent=2), encoding="utf-8")
+    try:                      # best-effort: owner-only on POSIX, no-op on Windows
+        os.chmod(AUTH_FILE, 0o600)
+    except Exception:
+        pass
+    print(f"[ok] password set -> {AUTH_FILE.relative_to(PROJECT_ROOT)} "
+          "(hash only; keep this file out of git)")
+    return 0
+
+
+def _new_session() -> str:
+    token = secrets.token_urlsafe(32)
+    now = time.time()
+    _SESSIONS[token] = now + SESSION_TIMEOUT_SEC
+    for t, exp in list(_SESSIONS.items()):        # opportunistic cleanup
+        if exp < now:
+            _SESSIONS.pop(t, None)
+    return token
+
+
+def _session_valid(token: str | None) -> bool:
+    if not token:
+        return False
+    exp = _SESSIONS.get(token)
+    if exp is None:
+        return False
+    if exp < time.time():
+        _SESSIONS.pop(token, None)
+        return False
+    return True
+
+
+def _login_locked(ip: str) -> int:
+    """Seconds remaining in a lockout for this IP (0 if not locked)."""
+    rec = _LOGIN_FAILURES.get(ip)
+    if not rec or rec[0] < LOGIN_MAX_FAILURES:
+        return 0
+    remaining = int(rec[1] + LOGIN_LOCKOUT_SEC - time.time())
+    if remaining <= 0:
+        _LOGIN_FAILURES.pop(ip, None)
+        return 0
+    return remaining
+
+
+def _record_failure(ip: str) -> None:
+    rec = _LOGIN_FAILURES.setdefault(ip, [0, time.time()])
+    if rec[0] >= LOGIN_MAX_FAILURES and time.time() > rec[1] + LOGIN_LOCKOUT_SEC:
+        rec[:] = [0, time.time()]
+    rec[0] += 1
+    if rec[0] == LOGIN_MAX_FAILURES:
+        rec[1] = time.time()
+
+
+LOGIN_PAGE = Template("""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ALPR Admin — sign in</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, "Segoe UI", sans-serif; background: #0f1115;
+         color: #e7e9ee; display: grid; place-items: center; min-height: 100vh;
+         margin: 0; padding: 1rem; }
+  .card { width: 100%; max-width: 340px; background: #161a22; padding: 1.5rem;
+          border: 1px solid #232838; border-radius: 12px; }
+  h1 { font-size: 1.15rem; margin: 0 0 .3rem; }
+  .sub { color: #9aa3b2; font-size: .85rem; margin-bottom: 1.1rem; }
+  input { width: 100%; padding: .6rem .7rem; border-radius: 8px;
+          border: 1px solid #2a3040; background: #0f1115; color: #e7e9ee;
+          font-size: 1rem; }
+  button { width: 100%; margin-top: .8rem; padding: .6rem; border: 0;
+           border-radius: 8px; background: #2b6cb0; color: #fff;
+           font-weight: 700; font-size: 1rem; cursor: pointer; }
+  .err { background: #3a1b1b; color: #ff6b6b; padding: .5rem .7rem;
+         border-radius: 8px; font-size: .85rem; margin-bottom: .8rem; }
+</style></head><body>
+  <div class="card">
+    <h1>ALPR Admin</h1>
+    <div class="sub">Whitelist &amp; audit control</div>
+    {% if error %}<div class="err">{{ error }}</div>{% endif %}
+    <form method="post" action="/login">
+      <input type="password" name="password" placeholder="Admin password"
+             autofocus autocomplete="current-password" required>
+      <button type="submit">Sign in</button>
+    </form>
+  </div>
+</body></html>""")
 
 PAGE = Template("""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -161,7 +336,12 @@ PAGE = Template("""<!doctype html>
   {% endif %}
 
   <div class="card">
-    <h2 style="margin-top:0">🔎 Audit log</h2>
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <h2 style="margin:0">🔎 Audit log</h2>
+      <form class="inline" method="post" action="/clear_reads"
+            onsubmit="return confirm('Delete ALL {{ n_reads_total }} audit reads? This cannot be undone. (The whitelist is NOT affected.)')">
+        <button class="b-del">🗑 Delete ALL reads ({{ n_reads_total }})</button></form>
+    </div>
     <form method="get" action="/" class="row">
       <div><label>Plate contains</label><input name="q" value="{{ q }}"></div>
       <div><label>Action</label>
@@ -171,13 +351,19 @@ PAGE = Template("""<!doctype html>
         </select></div>
       <div><button class="b-act">Search</button></div>
     </form>
-    <table><tr><th>Time</th><th>Read</th><th>Action</th><th>Conf</th><th>Where</th></tr>
+    <table><tr><th>Time</th><th>Read</th><th>Action</th><th>Conf</th><th>Where</th><th></th></tr>
     {% for r in reads %}
       <tr><td class="sub">{{ r.timestamp }}</td><td class="plate">{{ r.detected_plate }}</td>
         <td class="{{ r.cls }}">{{ r.action }}</td><td>{{ r.crnn_confidence }}</td>
-        <td class="sub">{{ r.location }}</td></tr>
-    {% else %}<tr><td colspan="5" class="sub">no matching reads</td></tr>{% endfor %}
+        <td class="sub">{{ r.location }}</td>
+        <td><form class="inline" method="post" action="/delete_read"
+              onsubmit="return confirm('Delete this read ({{ r.detected_plate }})?')">
+          <input type="hidden" name="read_id" value="{{ r.id }}">
+          <button class="b-del">Delete</button></form></td></tr>
+    {% else %}<tr><td colspan="6" class="sub">no matching reads</td></tr>{% endfor %}
     </table>
+    <p class="sub">Showing the latest {{ reads|length }}. Use search to find older ones,
+       or "Delete ALL" to clear the whole history.</p>
   </div>
 </body></html>""")
 
@@ -221,24 +407,50 @@ def render(db: PlateDatabase, q: str = "", action_f: str = "",
         if len(candidates) >= 10:
             break
 
+    n_reads_total = db.get_stats().get("total_reads", 0)
     html = PAGE.render(
         authorized=authorized, blocked=blocked,
         n_auth=len(authorized), n_blocked=len(blocked), n_total=len(plates),
         reads=reads, candidates=candidates, inside=db.active_sessions(),
+        n_reads_total=n_reads_total,
         q=q, action_f=action_f, actions=ACTIONS, msg=msg, msg_kind=msg_kind)
     return html.encode("utf-8")
 
 
 class Handler(BaseHTTPRequestHandler):
+    # A browser closing/reloading a tab aborts the socket mid-response; on Windows
+    # that surfaces as WinError 10053. It is harmless (the server keeps running) but
+    # BaseHTTPRequestHandler would print an alarming traceback. Swallow it everywhere.
+    _CLIENT_GONE = (ConnectionAbortedError, ConnectionResetError, BrokenPipeError)
+
+    auth_required = True                  # set False only by --no-auth (localhost)
+
     def log_message(self, *a):            # quieter console
         pass
 
-    def _send(self, body: bytes, status: int = 200):
-        self.send_response(status)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+    def handle_one_request(self):
+        try:
+            super().handle_one_request()
+        except self._CLIENT_GONE:
+            self.close_connection = True   # client vanished mid-request — ignore quietly
+
+    def _send(self, body: bytes, status: int = 200, extra: list | None = None):
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            # Defensive headers: the panel embeds no third-party content and must not
+            # be framed (clickjacking a DELETE button would be trivial otherwise).
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("Cache-Control", "no-store")
+            for k, v in (extra or []):
+                self.send_header(k, v)
+            self.end_headers()
+            self.wfile.write(body)
+        except self._CLIENT_GONE:
+            self.close_connection = True   # browser closed the tab — nothing to send
 
     def _redirect(self, msg: str, kind: str = "ok"):
         from urllib.parse import quote
@@ -246,7 +458,75 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Location", f"/?msg={quote(msg)}&kind={kind}")
         self.end_headers()
 
+    # ---------------- auth helpers ---------------- #
+    def _client_ip(self) -> str:
+        return self.client_address[0] if self.client_address else "?"
+
+    def _cookie_token(self) -> str | None:
+        raw = self.headers.get("Cookie")
+        if not raw:
+            return None
+        try:
+            return SimpleCookie(raw).get(SESSION_COOKIE).value    # type: ignore[union-attr]
+        except Exception:
+            return None
+
+    def _authed(self) -> bool:
+        return (not self.auth_required) or _session_valid(self._cookie_token())
+
+    def _send_login(self, error: str = "", status: int = 200):
+        self._send(LOGIN_PAGE.render(error=error).encode("utf-8"), status)
+
+    def _require_auth(self) -> bool:
+        """True if the request may proceed; otherwise the response is already sent."""
+        if self._authed():
+            return True
+        if self.command == "POST":
+            # Never redirect a mutating request to a page — fail it outright.
+            self._send(b"<h1>401 - sign in required</h1>", 401)
+        else:
+            self._send_login()
+        return False
+
+    def _do_login(self, form: dict):
+        ip = self._client_ip()
+        locked = _login_locked(ip)
+        if locked:
+            self._send_login(f"Too many attempts. Try again in {locked}s.", 429)
+            return
+        record = load_auth()
+        if record and verify_password(form.get("password", [""])[0], record):
+            _LOGIN_FAILURES.pop(ip, None)
+            token = _new_session()
+            cookie = (f"{SESSION_COOKIE}={token}; HttpOnly; SameSite=Strict; "
+                      f"Path=/; Max-Age={SESSION_TIMEOUT_SEC}")
+            self.send_response(303)
+            self.send_header("Location", "/")
+            self.send_header("Set-Cookie", cookie)
+            self.end_headers()
+            return
+        _record_failure(ip)
+        print(f"[admin] failed login from {ip}")
+        self._send_login("Wrong password.", 401)
+
+    def _do_logout(self):
+        _SESSIONS.pop(self._cookie_token() or "", None)
+        self.send_response(303)
+        self.send_header("Location", "/")
+        self.send_header("Set-Cookie",
+                         f"{SESSION_COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0")
+        self.end_headers()
+
     def do_GET(self):
+        path = urlparse(self.path).path
+        if path == "/login":
+            self._send_login() if not self._authed() else self._redirect("already signed in")
+            return
+        if path == "/logout":
+            self._do_logout()
+            return
+        if not self._require_auth():
+            return
         qs = parse_qs(urlparse(self.path).query)
         db = _db()
         try:
@@ -259,8 +539,50 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         n = int(self.headers.get("Content-Length", 0))
         form = parse_qs(self.rfile.read(n).decode("utf-8"))
-        plate = form.get("plate_text", [""])[0].strip()
         path = urlparse(self.path).path
+        if path == "/login":
+            self._do_login(form)
+            return
+        if not self._require_auth():
+            return
+
+        # ---- audit-log record deletion (these carry no plate_text) ---- #
+        if path == "/delete_read":
+            db = _db()
+            try:
+                rid = form.get("read_id", [""])[0]
+                if not rid.isdigit():
+                    self._redirect("bad read id", "err"); return
+                photo = db.delete_read(int(rid))          # returns its photo path or None
+                if photo:
+                    try:
+                        (PROJECT_ROOT / photo).unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                self._redirect(f"deleted read #{rid}" if photo is not None
+                               else f"read #{rid} not found",
+                               "ok" if photo is not None else "err")
+            finally:
+                db.close()
+            return
+        if path == "/clear_reads":
+            db = _db()
+            try:
+                photos = db.clear_reads()                 # deletes all rows, returns photo paths
+                removed = 0
+                for p in photos:
+                    try:
+                        (PROJECT_ROOT / p).unlink(missing_ok=True)
+                        removed += 1
+                    except Exception:
+                        pass
+                self._redirect(f"cleared all reads ({len(photos)} rows, "
+                               f"{removed} evidence photos removed)")
+            finally:
+                db.close()
+            return
+
+        plate = form.get("plate_text", [""])[0].strip()
         db = _db()
         try:
             if not plate:
@@ -312,17 +634,75 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=5000)
     ap.add_argument("--host", default="0.0.0.0")
+    ap.add_argument("--set-password", action="store_true",
+                    help="set/replace the admin password, then exit")
+    ap.add_argument("--no-auth", action="store_true",
+                    help="DANGEROUS: serve with no login. Loopback binds only.")
+    ap.add_argument("--open", action="store_true",
+                    help="open the panel in a browser once the server is listening")
     args = ap.parse_args()
 
+    if args.set_password:
+        sys.exit(set_password_cli())
+
+    loopback = args.host in ("127.0.0.1", "localhost", "::1")
+    if args.no_auth:
+        # An unauthenticated panel that can delete whitelist entries must never be
+        # reachable from the network. Refuse rather than warn-and-continue.
+        if not loopback:
+            print("[X] --no-auth only works with --host 127.0.0.1 "
+                  f"(you asked for {args.host!r}).")
+            print("    This panel can add and DELETE whitelist plates; serving it")
+            print("    unauthenticated on the LAN would hand the gate to anyone.")
+            sys.exit(2)
+        Handler.auth_required = False
+        print("!" * 56)
+        print(" WARNING: authentication DISABLED (--no-auth), localhost only.")
+        print(" Anyone with access to this machine controls the whitelist.")
+        print("!" * 56)
+    elif load_auth() is None:
+        print("=" * 56)
+        print(" ALPR Whitelist Admin — NO PASSWORD SET")
+        print("=" * 56)
+        print(" This panel adds, suspends and DELETES whitelist plates — it decides")
+        print(" who the gate opens for — so it will not start unauthenticated.")
+        print("")
+        print("   python scripts/system/admin_web.py --set-password")
+        print("")
+        print(" Or, for a localhost-only demo:")
+        print("   python scripts/system/admin_web.py --no-auth --host 127.0.0.1")
+        print("=" * 56)
+        sys.exit(2)
+
+    # Bind the socket BEFORE anything opens a browser. This is the fix for the
+    # recurring "localhost refused to connect": the old flow opened the browser
+    # first and the server bound a moment later, so the first page load always
+    # failed. Now the browser is opened by a thread that fires only after the
+    # server is already listening.
     srv = HTTPServer((args.host, args.port), Handler)
     ip = _lan_ip()
     print("=" * 56)
     print(" ALPR Whitelist Admin — web panel")
     print("=" * 56)
     print(f"  On this PC   : http://localhost:{args.port}")
-    print(f"  On your phone: http://{ip}:{args.port}   (same Wi-Fi)")
+    if not loopback:
+        print(f"  On your phone: http://{ip}:{args.port}   (same Wi-Fi)")
+    print(f"  Auth         : {'DISABLED (--no-auth)' if args.no_auth else 'password required'}")
     print("  Ctrl+C to stop.")
     print("=" * 56)
+
+    if args.open:
+        import threading
+        import webbrowser
+
+        def _open_when_ready():
+            time.sleep(1.0)          # the socket is already bound; give it a beat
+            try:
+                webbrowser.open(f"http://localhost:{args.port}")
+            except Exception:
+                pass
+        threading.Thread(target=_open_when_ready, daemon=True).start()
+
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

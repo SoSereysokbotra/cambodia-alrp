@@ -57,11 +57,15 @@ WHITELIST_NUMBERS = [
 ]
 
 # Candidate fonts (first that exists wins). Latin/digits only -> any TTF works.
+# Windows paths first (local runs), then Linux paths so this also works on Colab.
 FONT_CANDIDATES = [
     r"C:/Windows/Fonts/arialbd.ttf",
     r"C:/Windows/Fonts/arial.ttf",
     r"C:/Windows/Fonts/consolab.ttf",
     r"C:/Windows/Fonts/segoeui.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",     # Colab / Linux
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
 ]
 
 
@@ -97,18 +101,75 @@ def random_plate_number() -> str:
     return "".join(out)
 
 
+# Real Cambodian plates: near-white background, dark BLUE number ink (IMPROVEMENT #1).
+PLATE_BG = [(252, 252, 252), (246, 246, 242), (238, 240, 245), (250, 248, 240)]
+PLATE_INK = [(18, 28, 110), (12, 20, 90), (25, 30, 120), (15, 15, 30)]
+
+
+def _realistic_augment(img: Image.Image, bg) -> Image.Image:
+    """IMPROVEMENT #1: make a synthetic crop look like a real gate PHOTO — mild
+    perspective, uneven lighting, blur, sensor noise, JPEG artefacts — so the model
+    (and the STN straightening layer) transfer from synthetic to real plates."""
+    # perspective (plates are photographed at an angle) — needs cv2, skip if absent
+    if random.random() < 0.6:
+        try:
+            import cv2
+            arr = np.array(img)
+            h, w = arr.shape[:2]
+            m = 0.12
+            src = np.float32([[0, 0], [w, 0], [w, h], [0, h]])
+            dst = np.float32([
+                [random.uniform(0, w * m), random.uniform(0, h * m)],
+                [w - random.uniform(0, w * m), random.uniform(0, h * m)],
+                [w - random.uniform(0, w * m), h - random.uniform(0, h * m)],
+                [random.uniform(0, w * m), h - random.uniform(0, h * m)]])
+            M = cv2.getPerspectiveTransform(src, dst)
+            arr = cv2.warpPerspective(arr, M, (w, h), borderValue=bg)
+            img = Image.fromarray(arr)
+        except Exception:
+            pass
+    # slight rotation
+    if random.random() < 0.6:
+        img = img.rotate(random.uniform(-7, 7), expand=False,
+                         fillcolor=bg, resample=Image.BILINEAR)
+    # uneven lighting (a bright-to-dark gradient across the plate)
+    if random.random() < 0.5:
+        arr = np.array(img).astype("float32")
+        w = arr.shape[1]
+        grad = np.linspace(random.uniform(0.65, 1.0),
+                           random.uniform(1.0, 1.35), w)[None, :, None]
+        img = Image.fromarray(np.clip(arr * grad, 0, 255).astype("uint8"))
+    # blur
+    if random.random() < 0.5:
+        img = img.filter(ImageFilter.GaussianBlur(random.uniform(0.3, 1.6)))
+    # sensor noise
+    if random.random() < 0.6:
+        arr = np.asarray(img).astype("int16")
+        arr = np.clip(arr + np.random.normal(0, random.uniform(4, 22), arr.shape),
+                      0, 255).astype("uint8")
+        img = Image.fromarray(arr)
+    # JPEG compression artefacts (real photos are JPEGs)
+    if random.random() < 0.5:
+        import io
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=random.randint(35, 80))
+        buf.seek(0)
+        img = Image.open(buf).convert("RGB")
+    return img
+
+
 def render_plate(text: str, font: ImageFont.FreeTypeFont,
                  augment: bool = True) -> Image.Image:
-    """Render one plate-number image (BGR-agnostic grayscale-friendly)."""
+    """Render one realistic plate-number image (IMPROVEMENT #1)."""
     W, H = 320, 96
-    # plate background: white or pale yellow
-    bg = random.choice([(255, 255, 255), (250, 240, 200), (235, 235, 235)])
+    bg = random.choice(PLATE_BG)
     img = Image.new("RGB", (W, H), bg)
     draw = ImageDraw.Draw(img)
 
-    # optional border
-    if random.random() < 0.7:
-        draw.rectangle([2, 2, W - 3, H - 3], outline=(0, 0, 0), width=2)
+    ink = random.choice(PLATE_INK)
+    # blue-ish border like a real plate
+    if random.random() < 0.8:
+        draw.rectangle([2, 2, W - 3, H - 3], outline=ink, width=2)
 
     # centre the text
     try:
@@ -118,23 +179,13 @@ def render_plate(text: str, font: ImageFont.FreeTypeFont,
     except Exception:
         tw, th = draw.textlength(text, font=font), 40
         tx, ty = (W - tw) // 2, (H - th) // 2
-    ink = random.choice([(0, 0, 0), (10, 10, 40), (20, 20, 20)])
     draw.text((tx, ty), text, fill=ink, font=font)
+    # underline under the number, like real Cambodian plates
+    if random.random() < 0.5:
+        draw.line([(tx, ty + th + 5), (tx + tw, ty + th + 5)], fill=ink, width=2)
 
     if augment:
-        # slight rotation
-        if random.random() < 0.6:
-            img = img.rotate(random.uniform(-6, 6), expand=False,
-                             fillcolor=bg, resample=Image.BILINEAR)
-        # blur
-        if random.random() < 0.4:
-            img = img.filter(ImageFilter.GaussianBlur(random.uniform(0.3, 1.2)))
-        # gaussian noise
-        if random.random() < 0.6:
-            arr = np.asarray(img).astype("int16")
-            noise = np.random.normal(0, random.uniform(4, 18), arr.shape)
-            arr = np.clip(arr + noise, 0, 255).astype("uint8")
-            img = Image.fromarray(arr)
+        img = _realistic_augment(img, bg)
     return img
 
 

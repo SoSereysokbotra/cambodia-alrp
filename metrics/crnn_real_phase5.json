@@ -1,0 +1,10 @@
+{
+  "tag": "phase5",
+  "split": "test",
+  "weights": "crnn_ft_phase5.pth",
+  "n": 149,
+  "cer": 0.1011,
+  "word_accuracy": 0.7047,
+  "mean_confidence": 0.9108,
+  "below_gate_pct": 0.0403
+}
