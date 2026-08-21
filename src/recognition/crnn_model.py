@@ -68,9 +68,19 @@ class STN(nn.Module):
         self.fc[-1].bias.data.copy_(
             torch.tensor([1, 0, 0, 0, 1, 0], dtype=torch.float))
 
+    def theta(self, x: torch.Tensor) -> torch.Tensor:
+        """The predicted affine matrix, (N,2,3).
+
+        Exposed so training can SUPERVISE it directly. Left to the CTC loss alone
+        the layer never learns to rotate — measured 2026-08-20, it sits at
+        [[+1.09,0,0.05],[0,+1.05,-0.01]] (near-identity) for flipped and upright
+        input alike, i.e. it straightens nothing. See --stn-supervise in
+        scripts/recognition/finetune_crnn.py.
+        """
+        return self.fc(self.loc(x).flatten(1)).view(-1, 2, 3)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        theta = self.fc(self.loc(x).flatten(1)).view(-1, 2, 3)
-        grid = F.affine_grid(theta, x.size(), align_corners=False)
+        grid = F.affine_grid(self.theta(x), x.size(), align_corners=False)
         return F.grid_sample(x, grid, align_corners=False)
 
 

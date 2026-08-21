@@ -43,6 +43,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src" / "recognition"))
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 
 from crnn_model import CRNN, CTCDecoder, CHARSET, BLANK   # noqa: E402
@@ -107,12 +108,16 @@ def read_csv(path: Path, match: str | None, forbid_test: bool = False):
 ROTATE180_PROB = 0.0
 
 
-def augment(img: np.ndarray) -> np.ndarray:
-    """Light appearance augmentation to expand the small real set."""
+def augment(img: np.ndarray) -> tuple[np.ndarray, int]:
+    """Light appearance augmentation. Returns (image, was_flipped_180)."""
     import cv2
     # ROTATION: teach the CRNN to read upside-down crops (MODEL training approach).
+    # The flag is returned because --stn-supervise uses it as a FREE label: we are
+    # the ones flipping, so we know exactly what the STN should undo.
+    flipped = 0
     if ROTATE180_PROB and random.random() < ROTATE180_PROB:
         img = cv2.rotate(img, cv2.ROTATE_180)
+        flipped = 1
     h, w = img.shape
     # brightness / contrast
     if random.random() < 0.7:
@@ -132,7 +137,7 @@ def augment(img: np.ndarray) -> np.ndarray:
         ang = random.uniform(-4, 4)
         M = cv2.getRotationMatrix2D((w / 2, h / 2), ang, 1.0)
         img = cv2.warpAffine(img, M, (w, h), borderMode=cv2.BORDER_REPLICATE)
-    return img
+    return img, flipped
 
 
 class RealCropDataset(Dataset):
@@ -151,19 +156,47 @@ class RealCropDataset(Dataset):
         if img is None:
             img = np.full((IMG_H, IMG_W), 127, np.uint8)
         img = cv2.resize(img, (IMG_W, IMG_H))
+        flipped = 0
         if self.aug:
-            img = augment(img)
+            img, flipped = augment(img)
         t = torch.from_numpy(img.astype("float32") / 255.0).unsqueeze(0)
         t = (t - 0.5) / 0.5
         target = torch.tensor([CHAR_TO_IDX[c] for c in text], dtype=torch.long)
-        return t, target, len(target), text
+        return t, target, len(target), text, flipped
+
+
+def collate_with_flip(batch):
+    """Like crnn_dataset.collate_fn, but keeps the 180-flip flag per sample."""
+    images, targets, lengths, texts, flips = zip(*batch)
+    return (torch.stack(images, 0),
+            torch.cat(targets, 0) if len(targets) else torch.tensor([], dtype=torch.long),
+            torch.tensor(lengths, dtype=torch.long),
+            list(texts),
+            torch.tensor(flips, dtype=torch.float))
+
+
+def stn_target_theta(flips: torch.Tensor) -> torch.Tensor:
+    """The affine matrix the STN SHOULD predict for each sample.
+
+    flipped -> undo it with an exact 180 rotation [[-1,0,0],[0,-1,0]]
+    upright -> leave it alone, identity      [[ 1,0,0],[0, 1,0]]
+
+    Targeting the exact matrix also kills the stray ~9% zoom the unsupervised
+    layer drifted into.
+    """
+    n = flips.shape[0]
+    t = torch.zeros(n, 2, 3, device=flips.device)
+    s = 1.0 - 2.0 * flips              # +1 upright, -1 flipped
+    t[:, 0, 0] = s
+    t[:, 1, 1] = s
+    return t
 
 
 @torch.no_grad()
 def eval_cer(model, loader, decoder, device):
     model.eval()
     preds, tgts = [], []
-    for images, _, _, texts in loader:
+    for images, _, _, texts, _ in loader:
         lp = model(images.to(device))
         preds.extend(decoder.decode(lp.cpu()))
         tgts.extend(texts)
@@ -198,6 +231,10 @@ def main() -> None:
     ap.add_argument("--rotate180", type=float, default=0.0,
                     help="probability of flipping a training crop upside-down "
                          "(e.g. 0.5). Teaches the CRNN to read 180-degree plates.")
+    ap.add_argument("--stn-supervise", type=float, default=0.0, metavar="W",
+                    help="Weight for the STN orientation loss (needs --stn). "
+                         "0 = old behaviour (STN learns from CTC alone, and "
+                         "measurably never learns to rotate). Try 1.0.")
     ap.add_argument("--stn", action="store_true",
                     help="Way 1: add a learnable straightening layer (Spatial "
                          "Transformer) that turns rotated crops upright before "
@@ -257,9 +294,9 @@ def main() -> None:
 
     nw = 0 if sys.platform == "win32" else 4
     train_dl = DataLoader(RealCropDataset(train_samples, True), batch_size=args.batch,
-                          shuffle=True, collate_fn=collate_fn, num_workers=nw, drop_last=True)
+                          shuffle=True, collate_fn=collate_with_flip, num_workers=nw, drop_last=True)
     val_dl = DataLoader(RealCropDataset(real_val, False), batch_size=args.batch,
-                        shuffle=False, collate_fn=collate_fn, num_workers=nw)
+                        shuffle=False, collate_fn=collate_with_flip, num_workers=nw)
 
     # build model + load synthetic base weights (full fine-tune).
     # Way 1 (--stn): add the learnable straightening layer. The base weights have no
@@ -293,19 +330,31 @@ def main() -> None:
     for epoch in range(1, args.epochs + 1):
         model.train()
         run = n = 0.0
-        for images, targets, tlen, _ in tqdm(train_dl, desc=f"Epoch {epoch}/{args.epochs}", leave=False):
+        aux_run = 0.0
+        for images, targets, tlen, _, flips in tqdm(train_dl, desc=f"Epoch {epoch}/{args.epochs}", leave=False):
             images, targets = images.to(device), targets.to(device)
             lp = model(images)
             T, N = lp.size(0), lp.size(1)
             in_len = torch.full((N,), T, dtype=torch.long)
             loss = criterion(lp, targets, in_len, tlen)
+            # Supervise the straightening layer directly. We flipped these crops
+            # ourselves, so the correct transform is known exactly — no need to
+            # hope the CTC loss discovers rotation on its own (it does not).
+            if args.stn and args.stn_supervise > 0:
+                flips = flips.to(device)
+                theta = model.stn.theta(images)
+                aux = F.mse_loss(theta, stn_target_theta(flips))
+                loss = loss + args.stn_supervise * aux
+                aux_run += aux.item()
             optimizer.zero_grad(); loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 5.0)
             optimizer.step()
             run += loss.item(); n += 1
         scheduler.step()
         vcer, vacc = eval_cer(model, val_dl, decoder, device)
-        print(f"Epoch {epoch}/{args.epochs} | loss {run/max(n,1):.4f} | "
+        aux_note = (f" | stn {aux_run/max(n,1):.4f}"
+                    if args.stn and args.stn_supervise > 0 else "")
+        print(f"Epoch {epoch}/{args.epochs} | loss {run/max(n,1):.4f}{aux_note} | "
               f"val CER {vcer*100:.2f}% | val word-acc {vacc*100:.2f}%")
         if vcer < best_cer:
             best_cer = vcer

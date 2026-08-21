@@ -12,6 +12,7 @@ small bundle instead of the whole project (no photos/, .venv/, runs/, .git/).
 """
 from __future__ import annotations
 
+import argparse
 import sys
 import zipfile
 from pathlib import Path
@@ -47,13 +48,33 @@ INCLUDE_FILES = [
 ]
 SKIP_SUFFIX = {".pyc"}
 
+# Dirs only the DETECTOR / province work needs, plus data Colab regenerates
+# itself. Dropping them takes the zip from ~413 MB to ~150 MB, which matters a
+# lot when you have to re-upload after every new batch of labels.
+CRNN_ONLY_DROP = [
+    "data/annotated",     # detector dataset — finetune_crnn.py never reads it
+    "data/synthetic",     # regenerated on Colab by generate_synthetic.py
+]
+
 
 def main() -> None:
+    ap = argparse.ArgumentParser(description="build the Colab training bundle")
+    ap.add_argument("--crnn-only", action="store_true",
+                    help="skip the detector dataset and the synthetic set "
+                         "(Colab regenerates the latter) — much smaller upload")
+    args = ap.parse_args()
+
+    include_dirs = list(INCLUDE_DIRS)
+    if args.crnn_only:
+        include_dirs = [d for d in include_dirs if d not in CRNN_ONLY_DROP]
+        print("[crnn-only] skipping: " + ", ".join(CRNN_ONLY_DROP))
+        print("            the Colab notebook regenerates data/synthetic itself.\n")
+
     n = 0
     total = 0
     OUT.unlink(missing_ok=True)
     with zipfile.ZipFile(OUT, "w", zipfile.ZIP_DEFLATED) as z:
-        for d in INCLUDE_DIRS:
+        for d in include_dirs:
             base = PROJECT_ROOT / d
             if not base.exists():
                 print(f"  [skip] {d} (not found)")
