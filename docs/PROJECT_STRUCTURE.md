@@ -7,11 +7,13 @@ package (the library); `scripts/` holds runnable entry points grouped by purpose
 Cambodian ALPR Project/
 │
 ├── README.md                     # project overview + quick start
+├── requirements.txt              # core deps (+ requirements-gdrive.txt for Drive sync)
+├── main.py                       # CLI entry point
 ├── .gitignore
-├── plates.db                     # SQLite runtime DB (whitelist + audit log)
 │
 ├── configs/
 │   └── system_config.yaml        # all runtime settings (no hardcoded paths)
+│                                 #   (gdrive_*.json / admin_auth.json live here, git-ignored)
 │
 ├── src/                          # ── LIBRARY (importable package) ──
 │   ├── detection/                #   YOLOv10 plate detector
@@ -70,10 +72,17 @@ Cambodian ALPR Project/
 │   ├── recognition/              # crnn_best.pth + charset.txt (READ ONLY)
 │   └── pretrained/               # base weights (yolov10n.pt, etc.)
 │
-├── data/                         # (git-ignored) datasets
+├── notebooks/                    # Colab training notebooks
+│   ├── colab_train.ipynb         #   CRNN + STN fine-tune (upload alpr_colab_bundle.zip)
+│   ├── colab_train_province.ipynb
+│   └── colab_transfer_learning.ipynb
+│
+├── data/                         # (git-ignored) datasets — see dataset link in README
 │   ├── annotated/                #   YOLO detection data (Plate_v4)
 │   ├── synthetic/                #   generated CRNN training data
-│   └── crnn_crops/               #   real crops for fine-tuning
+│   ├── crnn_crops/               #   real crops for fine-tuning
+│   ├── province_crops/           #   province classifier crops (manifest.json tracked)
+│   └── number_detect/            #   number-detector set (data.yaml tracked)
 │
 ├── docs/                         # documentation
 │   ├── srs.md                    #   Software Requirements Specification
@@ -87,7 +96,9 @@ Cambodian ALPR Project/
 ├── hardware/
 │   └── esp32_gate_controller/    #   ESP32 firmware (.ino)
 │
-├── metrics/                      # saved metrics + summaries (JSON/TXT)
+├── metrics/                      # saved metrics + experiment_log.csv (tracked)
+├── photos/                       # gate evidence photos (git-ignored — real plates)
+├── plates.db                     # SQLite runtime DB (git-ignored; scripts/database/setup.py)
 ├── results/                      # annotated outputs, crops
 ├── outputs/                      # per-session run outputs (git-ignored)
 ├── runs/                         # training runs (git-ignored)
@@ -108,7 +119,9 @@ Cambodian ALPR Project/
 - **Read-only models.** `models/detection/best.pt` and
   `models/recognition/crnn_best.pth` are never overwritten by scripts.
 - **Git-ignored:** `.venv/`, `data/`, `models/`, `runs/`, `outputs/`, `logs/`,
-  `backups/`, `third_party/` — large or regenerable.
+  `backups/`, `photos/`, `plates.db*`, `third_party/` — large, regenerable, or
+  private. Secrets (`configs/gdrive_*.json`, `configs/admin_auth.json`) are
+  ignored by filename wherever they sit.
 
 ## How to run (from the project root, venv active)
 

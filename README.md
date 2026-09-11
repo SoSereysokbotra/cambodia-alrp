@@ -48,8 +48,10 @@ See **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** for live-camera and ESP32 setup
 - `scripts/` — runnable entry points grouped by stage (setup, detection,
   recognition, database, pipeline, system, tools)
 - `configs/system_config.yaml` — all runtime settings
+- `notebooks/` — Colab training notebooks (CRNN/STN, province classifier)
 - `docs/` — SRS, schema, structure, deployment, and the SRS-alignment plan
 - `hardware/` — ESP32 gate-controller firmware
+- `metrics/experiment_log.csv` — append-only log of every measured metric, by commit
 
 Full tree: **[docs/PROJECT_STRUCTURE.md](docs/PROJECT_STRUCTURE.md)**
 
@@ -66,9 +68,13 @@ Full tree: **[docs/PROJECT_STRUCTURE.md](docs/PROJECT_STRUCTURE.md)**
 
 ## Dataset & credits
 
+Datasets are not stored in this repository (`data/` is git-ignored).
+
 - Detection: **Plate_v4** (`taki-dk0de`, Roboflow Universe, CC BY 4.0) — 3,299
   Cambodian plates.
-- Recognition: synthetically generated plates (this repo).
+- Recognition: real plate crops (collected + labelled for this project) and
+  synthetically generated plates (`scripts/recognition/generate_synthetic.py`).
+- Full dataset archive: _add your Google Drive / Roboflow link here_
 
 ## Status
 
