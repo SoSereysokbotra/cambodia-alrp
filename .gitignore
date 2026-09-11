@@ -92,3 +92,25 @@ configs/gdrive_token.json
 configs/gdrive_sync_state.json
 configs/_gdrive_test.txt
 
+
+# Secrets — path-independent, so an accidental folder move can never expose them
+**/gdrive_credentials.json
+**/gdrive_token.json
+**/gdrive_sync_state.json
+**/admin_auth.json
+
+# --- Runtime database + backups (recreate with: python scripts/database/setup.py) ---
+plates.db
+plates.db.*
+
+# --- Evidence photos: real license plates captured at the gate. Never public. ---
+photos/*
+!photos/.gitkeep
+
+# --- Dataset folders that were missing from the rules above ---
+data/province_crops/*
+!data/province_crops/manifest.json
+data/number_annotation/
+data/number_detect/*
+!data/number_detect/data.yaml
+*.cache
