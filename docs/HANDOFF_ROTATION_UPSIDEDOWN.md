@@ -72,7 +72,7 @@ it renders. Colab-safe fonts already added (`/usr/share/fonts/.../DejaVuSans-Bol
 1. Rebuild the bundle so Colab gets the new generator code:
    `python scripts/tools/make_colab_bundle.py`  → `alpr_colab_bundle.zip` (~417 MB)
 2. User uploads it to Google Drive folder `ALPR` (REPLACING the old zip — critical).
-3. Run `colab_train.ipynb` (already set up: generate synthetic → train STN → measure).
+3. Run `notebooks/colab_train.ipynb` (already set up: generate synthetic → train STN → measure).
    The key training command inside it:
    ```
    python scripts/recognition/finetune_crnn.py --stn --rotate180 0.5 --synth-n 16000 \
@@ -116,7 +116,7 @@ Currently only 578 real crops exist (in `data/crnn_crops/train/`, labelled in
 | `scripts/recognition/generate_synthetic.py` | synthetic plates (upgraded for #1) |
 | `scripts/tools/test_rotation_reading.py` | THE metric: upright vs upside-down on 149 real test crops |
 | `scripts/tools/make_colab_bundle.py` | builds `alpr_colab_bundle.zip` for Colab |
-| `colab_train.ipynb` | Colab notebook: generate synth → train STN → measure → save to Drive |
+| `notebooks/colab_train.ipynb` | Colab notebook: generate synth → train STN → measure → save to Drive |
 | `models/recognition/crnn_finetuned.pth` | DEPLOYED reader (upright-only, the baseline) |
 | `models/recognition/crnn_stn2.pth` | current best rotation reader (79% up / 55% down) — on user's Drive |
 
@@ -143,5 +143,5 @@ won't fully match upright (79%). 55% is already a defensible result. Frame #1/#2
 
 ## IMMEDIATE NEXT ACTION for the new AI
 #1's code is done. The next concrete step is to **rebuild the bundle** (`make_colab_bundle.py`)
-and have the user re-upload + run `colab_train.ipynb` to train + measure #1
+and have the user re-upload + run `notebooks/colab_train.ipynb` to train + measure #1
 (`crnn_stn3.pth`). Then follow the decision rule above and proceed to #2.

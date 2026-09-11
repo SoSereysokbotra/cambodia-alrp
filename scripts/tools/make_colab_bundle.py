@@ -8,7 +8,7 @@ small bundle instead of the whole project (no photos/, .venv/, runs/, .git/).
     python scripts/tools/make_colab_bundle.py
 
 -> creates  alpr_colab_bundle.zip  in the project root. Upload it to Google Drive
-   and run the Colab notebook (colab_train.ipynb).
+   and run the Colab notebook (notebooks/colab_train.ipynb).
 """
 from __future__ import annotations
 
@@ -96,7 +96,7 @@ def main() -> None:
     size_mb = OUT.stat().st_size / 1e6
     print(f"\n[ok] {OUT.name}: {n} files, {total/1e6:.0f} MB raw -> {size_mb:.0f} MB zipped")
     print(f"     {OUT}")
-    print("\nNext: upload this zip to Google Drive, then run colab_train.ipynb in Colab.")
+    print("\nNext: upload this zip to Google Drive, then run notebooks/colab_train.ipynb in Colab.")
 
 
 if __name__ == "__main__":
