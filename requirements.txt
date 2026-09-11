@@ -1,0 +1,34 @@
+# Cambodian ALPR — core runtime dependencies
+#
+# Fresh machine:  python scripts/setup/environment.py
+#   (creates .venv and installs PyTorch from the matching CUDA index, then this file)
+# Existing venv:  pip install -r requirements.txt
+#
+# PyTorch: the version below is CPU-only from PyPI. For GPU, install torch first
+# from https://pytorch.org/get-started/locally/ — environment.py does this for you.
+
+# --- deep learning ---
+torch>=2.0
+torchvision
+ultralytics>=8.1.0          # YOLOv10 plate + number detectors
+onnxruntime                 # ONNX export parity checks (scripts/tools/export_onnx.py)
+
+# --- vision / numerics ---
+opencv-python>=4.8
+numpy
+pillow
+matplotlib
+
+# --- system ---
+pyyaml                      # configs/system_config.yaml
+paho-mqtt                   # gate control -> ESP32
+psutil                      # system_metrics table
+jinja2                      # scripts/system/admin_web.py
+tqdm
+
+# --- training-time only ---
+roboflow                    # scripts/setup/roboflow.py dataset download
+# wandb                     # optional: live curves, finetune_crnn.py --wandb
+
+# --- optional extras (separate files) ---
+# Google Drive sync:        pip install -r requirements-gdrive.txt
