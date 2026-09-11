@@ -205,6 +205,60 @@ def eval_cer(model, loader, decoder, device):
     return cer(preds, tgts), exact / max(len(tgts), 1)
 
 
+# --------------------------------------------------------------------------- #
+# Optional live curves (Weights & Biases).
+#
+# Strictly a viewing aid for a run in progress — the one measurement that would
+# have caught the decorative-STN problem three models early is `stn_aux`, which
+# this script already computes per epoch and then throws away.
+#
+# Every call is guarded: no package, no API key, or a dropped Colab connection
+# must degrade to a printed warning, never a dead training run.
+# --------------------------------------------------------------------------- #
+def wandb_init(args, n_train: int, n_val: int, device: str):
+    """Return the wandb module if live logging is on and working, else None."""
+    if not args.wandb:
+        return None
+    try:
+        import wandb
+    except ImportError:
+        print("[warn] --wandb given but wandb is not installed "
+              "(pip install wandb). Continuing without live curves.")
+        return None
+    try:
+        cfg = {k: (str(v) if isinstance(v, Path) else v) for k, v in vars(args).items()}
+        cfg.update(n_train=n_train, n_val=n_val, device=device)
+        wandb.init(project=args.wandb_project,
+                   name=args.wandb_name or args.out.stem,
+                   config=cfg)
+        print(f"[wandb] streaming to project '{args.wandb_project}' "
+              f"as run '{wandb.run.name}'")
+        return wandb
+    except Exception as exc:
+        print(f"[warn] wandb init failed ({exc}). Continuing without live curves.")
+        return None
+
+
+def wandb_log(wb, payload: dict) -> None:
+    """Best-effort log. A logging hiccup must never abort training."""
+    if wb is None:
+        return
+    try:
+        wb.log(payload)
+    except Exception:
+        pass
+
+
+def wandb_finish(wb, summary: dict) -> None:
+    if wb is None:
+        return
+    try:
+        wb.run.summary.update(summary)
+        wb.finish()
+    except Exception:
+        pass
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -239,6 +293,15 @@ def main() -> None:
                     help="Way 1: add a learnable straightening layer (Spatial "
                          "Transformer) that turns rotated crops upright before "
                          "reading. Use WITH --rotate180 so it has rotations to learn from.")
+    ap.add_argument("--wandb", action="store_true",
+                    help="Stream live loss/CER curves to Weights & Biases. OFF by "
+                         "default. This is for watching a run in progress (e.g. when "
+                         "Colab dies at epoch 40) — metrics/experiment_log.csv stays "
+                         "the permanent audit trail either way.")
+    ap.add_argument("--wandb-project", default="cambodian-alpr-crnn",
+                    help="W&B project name.")
+    ap.add_argument("--wandb-name", default=None,
+                    help="W&B run name (default: the --out filename stem).")
     args = ap.parse_args()
     out_path = args.out
 
@@ -323,8 +386,11 @@ def main() -> None:
         def tqdm(x, **k):
             return x
 
+    wb = wandb_init(args, len(train_samples), len(real_val), device)
+
     base_cer, _ = eval_cer(model, val_dl, decoder, device)
     print(f"start: real-val CER {base_cer*100:.2f}% (before fine-tuning)")
+    wandb_log(wb, {"epoch": 0, "val_cer": base_cer})
 
     best_cer = float("inf")
     for epoch in range(1, args.epochs + 1):
@@ -356,6 +422,17 @@ def main() -> None:
                     if args.stn and args.stn_supervise > 0 else "")
         print(f"Epoch {epoch}/{args.epochs} | loss {run/max(n,1):.4f}{aux_note} | "
               f"val CER {vcer*100:.2f}% | val word-acc {vacc*100:.2f}%")
+        # `stn_aux` is the diagnostic that matters: if the straightening layer is
+        # actually learning the transform this descends, and if it is decorative
+        # it flatlines while val_cer still improves off the CTC loss alone.
+        payload = {"epoch": epoch,
+                   "train_loss": run / max(n, 1),
+                   "val_cer": vcer,
+                   "val_word_acc": vacc,
+                   "lr": scheduler.get_last_lr()[0]}
+        if args.stn and args.stn_supervise > 0:
+            payload["stn_aux"] = aux_run / max(n, 1)
+        wandb_log(wb, payload)
         if vcer < best_cer:
             best_cer = vcer
             torch.save(model.state_dict(), out_path)
@@ -364,6 +441,20 @@ def main() -> None:
     print("-" * 60)
     print(f"Done. Best real-val CER: {best_cer*100:.2f}% (was {base_cer*100:.2f}%)")
     print(f"Weights -> {out_path}")
+
+    # Log to experiment_log.csv (Phase A — audit trail)
+    try:
+        sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "tools"))
+        from experiment_log import log_metric
+        log_metric("crnn", "best_val_cer", f"{best_cer:.4f}", split="real-val",
+                   notes=f"{out_path.name}, {args.epochs}ep, stn={args.stn}, "
+                         f"stn_supervise={args.stn_supervise}")
+    except Exception as exc:
+        print(f"  [warn] could not log metric: {exc}")
+
+    wandb_finish(wb, {"best_val_cer": best_cer, "base_val_cer": base_cer,
+                      "weights": out_path.name})
+
     print("\nNow measure on the HELD-OUT test set:")
     print("  python scripts/recognition/evaluate_crnn_on_real.py --split test "
           "--weights models/recognition/crnn_finetuned.pth --tag finetuned")

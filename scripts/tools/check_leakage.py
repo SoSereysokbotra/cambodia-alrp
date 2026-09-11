@@ -63,7 +63,7 @@ def file_hash(p: Path) -> str:
     return hashlib.md5(p.read_bytes()).hexdigest()
 
 
-def audit(weights: Path | None) -> None:
+def audit(weights: Path | None, do_log: bool = False) -> None:
     rows = load()
     by = collections.defaultdict(list)
     for p, s, t in rows:
@@ -144,6 +144,38 @@ def audit(weights: Path | None) -> None:
     print("=" * 66)
     print(" CLEAN is the honest number. A large CLEAN/LEAKED gap = memorisation.")
 
+    if do_log:
+        sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "tools"))
+        from experiment_log import log_metric
+        wname = weights.name
+        # Per-bucket accuracy rows
+        for k in ("CLEAN", "LEAKED"):
+            n, u, d = buckets[k]
+            log_metric("crnn", "word_accuracy_upright",
+                       f"{u / max(n, 1):.4f}",
+                       split=f"real-test-{k.lower()}",
+                       notes=f"{wname}, n={n}")
+            log_metric("crnn", "word_accuracy_upsidedown",
+                       f"{d / max(n, 1):.4f}",
+                       split=f"real-test-{k.lower()}",
+                       notes=f"{wname}, n={n}")
+        # ALL bucket
+        n, u, d = tot
+        log_metric("crnn", "word_accuracy_upright",
+                   f"{u / max(n, 1):.4f}",
+                   split="real-test-all",
+                   notes=f"{wname}, n={n}")
+        log_metric("crnn", "word_accuracy_upsidedown",
+                   f"{d / max(n, 1):.4f}",
+                   split="real-test-all",
+                   notes=f"{wname}, n={n}")
+        # Contamination level
+        leak_frac = len(leaked_crops) / max(len(by["test"]), 1)
+        log_metric("dataset", "test_leaked_crop_fraction",
+                   f"{leak_frac:.4f}", split="real-test")
+        logged = 2 * 3 + 1  # 2 metrics * 3 buckets + 1 leak fraction
+        print(f"\n  [log] {logged} rows appended to experiment_log.csv")
+
 
 def write_clean() -> None:
     rows = load()
@@ -178,12 +210,14 @@ def main() -> None:
     ap.add_argument("--audit", action="store_true", help="report leakage (and score a model)")
     ap.add_argument("--weights", type=Path, default=None, help="model to score per bucket")
     ap.add_argument("--write-clean", action="store_true", help="write the de-leaked CSV")
+    ap.add_argument("--log", action="store_true",
+                    help="Append leakage/accuracy metrics to metrics/experiment_log.csv.")
     args = ap.parse_args()
 
     if not args.audit and not args.write_clean:
         ap.error("pass --audit and/or --write-clean")
     if args.audit:
-        audit(args.weights)
+        audit(args.weights, do_log=args.log)
     if args.write_clean:
         print()
         write_clean()

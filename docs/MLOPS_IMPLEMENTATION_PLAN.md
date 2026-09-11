@@ -18,7 +18,7 @@ The previous draft led with DVC. That is not where the damage is.
 | Fact | Evidence |
 |---|---|
 | Solo developer, 12 commits | `git shortlog -sn --all`, `git rev-list --count HEAD` |
-| Training runs on Colab, not locally | `colab_train.ipynb` mounts Drive, unzips a 151 MB bundle |
+| Training runs on Colab, not locally | `notebooks/colab_train.ipynb` mounts Drive, unzips a 151 MB bundle |
 | A local GPU *does* exist | RTX 3050 Laptop, `torch.cuda.is_available() == True` |
 | ~20,900 images in `data/` | `find data -type f -name '*.jpg' ...` |
 | 12 `.pth` candidates in `models/recognition/` | `ls models/recognition` |
@@ -155,7 +155,7 @@ convention decision, not a tooling one.
 
 This is the answer to the open question, and it follows from where weights are born.
 
-Weights are produced **on Colab**. `colab_train.ipynb:215-218` copies the result to
+Weights are produced **on Colab**. `notebooks/colab_train.ipynb:215-218` copies the result to
 `/content/drive/MyDrive/ALPR/trained/`. So:
 
 ```
@@ -195,7 +195,7 @@ equivalent; R2 has no egress fee, which matters when pulling ~430 MB.)
 
 ### B.4 — Colab side
 
-Add a cell to `colab_train.ipynb` that installs DVC, injects the R2 credentials from
+Add a cell to `notebooks/colab_train.ipynb` that installs DVC, injects the R2 credentials from
 Colab secrets (`google.colab.userdata`, **not** hardcoded), and pushes after training.
 Keep the existing `shutil.copy` to `/content/drive/MyDrive/ALPR/trained/` for now —
 two independent paths during the trial period is the point, not redundancy to remove.

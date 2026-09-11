@@ -204,3 +204,36 @@ timestamp,git_commit,component,metric,value,split,notes
 2026-08-08T15:02:14,57937e9,pipeline,province_accuracy,0.9524,real-test,"measured, n=147"
 2026-08-08T15:02:14,57937e9,pipeline,false_accept_rate,0.0,real-test,neighbour harness
 2026-08-08T15:02:14,57937e9,pipeline,consistency_flag_precision,0.0,real-test,"2.2, 0 flagged"
+2026-08-21T23:49:24,4c8d406,crnn_stn,theta_upright_a00,1.0562,real-test,crnn_stn2.pth
+2026-08-21T23:49:24,4c8d406,crnn_stn,theta_flipped_a00,1.0594,real-test,crnn_stn2.pth
+2026-08-21T23:49:24,4c8d406,crnn_stn,stn_flip_fraction,0.0000,real-test,crnn_stn2.pth
+2026-08-21T23:49:24,4c8d406,crnn_stn,stn_verdict,0,real-test,crnn_stn2.pth
+2026-08-21T23:50:08,4c8d406,crnn_stn,theta_upright_a00,0.9981,real-test,crnn_stn4.pth
+2026-08-21T23:50:08,4c8d406,crnn_stn,theta_flipped_a00,0.9978,real-test,crnn_stn4.pth
+2026-08-21T23:50:08,4c8d406,crnn_stn,stn_flip_fraction,0.0000,real-test,crnn_stn4.pth
+2026-08-21T23:50:08,4c8d406,crnn_stn,stn_verdict,0,real-test,crnn_stn4.pth
+2026-08-21T23:50:26,4c8d406,crnn_stn,theta_upright_a00,1.0912,real-test,crnn_stn5.pth
+2026-08-21T23:50:26,4c8d406,crnn_stn,theta_flipped_a00,1.0836,real-test,crnn_stn5.pth
+2026-08-21T23:50:26,4c8d406,crnn_stn,stn_flip_fraction,0.0000,real-test,crnn_stn5.pth
+2026-08-21T23:50:26,4c8d406,crnn_stn,stn_verdict,0,real-test,crnn_stn5.pth
+2026-08-21T23:50:53,4c8d406,crnn,word_accuracy_upright,0.7526,real-test-clean,"crnn_stn2.pth, n=97"
+2026-08-21T23:50:53,4c8d406,crnn,word_accuracy_upsidedown,0.4433,real-test-clean,"crnn_stn2.pth, n=97"
+2026-08-21T23:50:53,4c8d406,crnn,word_accuracy_upright,0.8654,real-test-leaked,"crnn_stn2.pth, n=52"
+2026-08-21T23:50:53,4c8d406,crnn,word_accuracy_upsidedown,0.7500,real-test-leaked,"crnn_stn2.pth, n=52"
+2026-08-21T23:50:53,4c8d406,crnn,word_accuracy_upright,0.7919,real-test-all,"crnn_stn2.pth, n=149"
+2026-08-21T23:50:53,4c8d406,crnn,word_accuracy_upsidedown,0.5503,real-test-all,"crnn_stn2.pth, n=149"
+2026-08-21T23:50:53,4c8d406,dataset,test_leaked_crop_fraction,0.3490,real-test,
+2026-08-21T23:51:15,4c8d406,crnn,word_accuracy_upright,0.8041,real-test-clean,"crnn_stn4.pth, n=97"
+2026-08-21T23:51:16,4c8d406,crnn,word_accuracy_upsidedown,0.5670,real-test-clean,"crnn_stn4.pth, n=97"
+2026-08-21T23:51:16,4c8d406,crnn,word_accuracy_upright,0.9615,real-test-leaked,"crnn_stn4.pth, n=52"
+2026-08-21T23:51:16,4c8d406,crnn,word_accuracy_upsidedown,0.9231,real-test-leaked,"crnn_stn4.pth, n=52"
+2026-08-21T23:51:16,4c8d406,crnn,word_accuracy_upright,0.8591,real-test-all,"crnn_stn4.pth, n=149"
+2026-08-21T23:51:16,4c8d406,crnn,word_accuracy_upsidedown,0.6913,real-test-all,"crnn_stn4.pth, n=149"
+2026-08-21T23:51:16,4c8d406,dataset,test_leaked_crop_fraction,0.3490,real-test,
+2026-08-21T23:51:39,4c8d406,crnn,word_accuracy_upright,0.8454,real-test-clean,"crnn_stn5.pth, n=97"
+2026-08-21T23:51:39,4c8d406,crnn,word_accuracy_upsidedown,0.4845,real-test-clean,"crnn_stn5.pth, n=97"
+2026-08-21T23:51:39,4c8d406,crnn,word_accuracy_upright,0.9231,real-test-leaked,"crnn_stn5.pth, n=52"
+2026-08-21T23:51:39,4c8d406,crnn,word_accuracy_upsidedown,0.5769,real-test-leaked,"crnn_stn5.pth, n=52"
+2026-08-21T23:51:39,4c8d406,crnn,word_accuracy_upright,0.8725,real-test-all,"crnn_stn5.pth, n=149"
+2026-08-21T23:51:39,4c8d406,crnn,word_accuracy_upsidedown,0.5168,real-test-all,"crnn_stn5.pth, n=149"
+2026-08-21T23:51:39,4c8d406,dataset,test_leaked_crop_fraction,0.3490,real-test,

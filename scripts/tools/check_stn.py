@@ -44,6 +44,8 @@ def main() -> None:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--weights", type=Path, required=True)
     ap.add_argument("--limit", type=int, default=149)
+    ap.add_argument("--log", action="store_true",
+                    help="Append STN metrics to metrics/experiment_log.csv.")
     args = ap.parse_args()
 
     import numpy as np
@@ -100,11 +102,30 @@ def main() -> None:
     print(f"  leaves an upright crop    : {'YES' if keeps else 'NO'}")
     print(f"  output resembles upright  : {'YES' if looks_upright else 'NO'}")
     print("=" * 68)
-    if rotates and keeps and looks_upright:
+    passed = rotates and keeps and looks_upright
+    if passed:
         print(" PASS — the straightening layer is doing real work.")
     else:
         print(" FAIL — the STN is not straightening. It is decorative;")
         print("        do not claim it as the mechanism in the write-up.")
+
+    if args.log:
+        sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "tools"))
+        from experiment_log import log_metric
+        wname = args.weights.name
+        log_metric("crnn_stn", "theta_upright_a00",
+                   f"{up_a[:, 0, 0].mean():.4f}", split="real-test",
+                   notes=wname)
+        log_metric("crnn_stn", "theta_flipped_a00",
+                   f"{dn_a[:, 0, 0].mean():.4f}", split="real-test",
+                   notes=wname)
+        log_metric("crnn_stn", "stn_flip_fraction",
+                   f"{frac:.4f}", split="real-test",
+                   notes=wname)
+        log_metric("crnn_stn", "stn_verdict",
+                   1 if passed else 0, split="real-test",
+                   notes=wname)
+        print(f"\n  [log] 4 rows appended to experiment_log.csv")
 
 
 if __name__ == "__main__":
