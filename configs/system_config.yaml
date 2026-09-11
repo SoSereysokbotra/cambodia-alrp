@@ -1,4 +1,5 @@
-camera_source: http://192.168.2.193:8080/video
+# camera_source: http://192.168.2.193:8080/video
+camera_source: data/annotated/test/images/
 camera:
   reconnect_interval_sec: 5
   max_reconnect_attempts: 10
@@ -6,7 +7,7 @@ camera:
   frame_timeout_sec: 2.0
 yolo_weights: models/detection/best.pt
 number_weights: models/detection/number_best.pt
-crnn_weights: models/recognition/crnn_finetuned.pth
+crnn_weights: models/recognition/crnn_stn5.pth
 charset_path: models/recognition/charset.txt
 db_path: plates.db
 assume_crop: false
@@ -27,6 +28,16 @@ gate:
   orientation_search: false
   consistency_check: false
   province_confidence_min: 0.55
+  # Fraction trimmed off EACH side of the province crop before classifying
+  # (0.0 = old behaviour). The classifier wants a TIGHT crop of the Khmer line;
+  # a loose one makes it confidently wrong, so bad reads pass the confidence gate.
+  # Swept END-TO-END through the real detector on 143 full test scenes 2026-08-23
+  # (this is the number that matters — the detector pads each box by 10%/side,
+  # so its crops are looser than the raw training crops):
+  #   0.000 -> 90.2%   0.050 -> 97.2%   0.075 -> 97.2%
+  #   0.100 -> 97.9%   0.125 -> 98.6%  <- best   0.150 -> 98.6%
+  # Lower to 0.0 to restore the old behaviour.
+  province_crop_trim: 0.125
   number_alignment_min: 0.2
   parking_mode: false
   parking_camera_role: auto

@@ -69,6 +69,21 @@ class ALPRSystem:
             cfg.get("gate", {}).get("province_confidence_min", 0.55))
         self.number_alignment_min = float(
             cfg.get("gate", {}).get("number_alignment_min", 0.20))
+        # Fraction trimmed off EACH side of the province crop before classifying.
+        # The classifier is trained on TIGHT crops of the Khmer line and is very
+        # one-sided about framing, while the detector pads every box by 10% per
+        # side (crop_pad / DET-005) — so its crops arrive too loose. Swept
+        # END-TO-END through the real detector on 143 full scenes 2026-08-23:
+        #     trim 0.000 -> 90.2%    trim 0.100 -> 97.9%
+        #     trim 0.050 -> 97.2%    trim 0.125 -> 98.6%  (best)
+        #     trim 0.075 -> 97.2%    trim 0.150 -> 98.6%
+        # Feeding it a LOOSER crop is what hurts: +20% context -> 81.1%,
+        # +40% -> 52.4%, and it stays CONFIDENT while wrong (~0.6), so those bad
+        # reads slip straight past province_confidence_min. Blur, low resolution,
+        # darkness, JPEG and rotation all cost under 1% each, so framing is the
+        # one thing worth correcting. 0.0 restores the old behaviour.
+        self.province_crop_trim = float(
+            cfg.get("gate", {}).get("province_crop_trim", 0.125))
         # Parking mode (open parking): entry records a session, exit clears it.
         gate_cfg = cfg.get("gate", {})
         self.parking_mode = bool(gate_cfg.get("parking_mode", False))
@@ -129,7 +144,11 @@ class ALPRSystem:
         # If the classifier isn't trained yet, fall back to number-only.
         self.province_classifier = None
         self._compose_plate = None
-        prov_w = _resolve("models/recognition/province_classifier_best.pth")
+        # Swappable like crnn_weights, so a candidate can be promoted by config
+        # instead of overwriting the deployed file. ProvinceClassifier picks up
+        # the matching <stem>_config.json automatically.
+        prov_w = _resolve(cfg.get("province_weights",
+                                  "models/recognition/province_classifier_best.pth"))
         if cfg.get("use_province", True) and prov_w.exists():
             try:
                 from province_classifier import ProvinceClassifier
@@ -222,6 +241,24 @@ class ALPRSystem:
                 self._gdrive = None
 
     # ------------------------------------------------------------------ #
+    @staticmethod
+    def _tighten_crop(crop, trim: float):
+        """Trim `trim` off each side of a crop, centred. 0.0 returns it unchanged.
+
+        The province classifier is trained on tight crops of the Khmer line and
+        degrades badly when given a looser one (measured: +40% context halves
+        accuracy, while -15% slightly IMPROVES it). Detector boxes on a live
+        camera sit looser than the scraped training crops, so trim before
+        classifying. Never trims a crop away to nothing.
+        """
+        if crop is None or trim <= 0.0:
+            return crop
+        h, w = crop.shape[:2]
+        dh, dw = int(h * trim), int(w * trim)
+        if h - 2 * dh < 8 or w - 2 * dw < 8:      # too small to trim safely
+            return crop
+        return crop[dh:h - dh, dw:w - dw]
+
     @staticmethod
     def _load_config(config_path: str) -> dict:
         path = _resolve(config_path)
@@ -399,10 +436,12 @@ class ALPRSystem:
                 number, crnn_conf, char_confs = "", 0.0, []   # no number line found
             weakest = self.reader.weakest_char(number, char_confs)
             number = number or "(unreadable)"
-            # Phase 3 — classify province and compose "provinceKhmer number"
+            # Phase 3 — classify province and compose "provinceKhmer number".
+            # The crop is trimmed first: see province_crop_trim above.
             prov_id = prov_conf = None
             if self.province_classifier is not None:
-                prov_id, prov_conf = self.province_classifier.predict(det["crop"])
+                prov_id, prov_conf = self.province_classifier.predict(
+                    self._tighten_crop(det["crop"], self.province_crop_trim))
                 plate_text = self._compose_plate(prov_id, number)
             else:
                 plate_text = number

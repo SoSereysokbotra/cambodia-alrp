@@ -46,7 +46,7 @@ STD = [0.229, 0.224, 0.225]
 
 
 def make_loaders(batch: int, workers: int, framing_aug: bool = True,
-                 rotate: bool = False):
+                 rotate: bool = False, rotate180: bool = False):
     from torchvision import datasets, transforms
     from torch.utils.data import DataLoader
 
@@ -60,15 +60,24 @@ def make_loaders(batch: int, workers: int, framing_aug: bool = True,
         # learns the province regardless of exact framing.
         # ROTATION (--rotate): degrees=180 makes the AFFINE rotate the crop to ANY
         # angle, so the classifier reads the province upside-down / sideways too.
+        # --rotate180 (preferred for upside-down plates): flip EXACTLY 180 deg
+        # half the time. --rotate spreads the model over every angle in
+        # [-180,180], including 90 deg where a wide Khmer line is mostly cut off
+        # by the square crop — capacity spent on orientations no plate ever has.
+        # A plate on a car is upright or upside-down, so train for those two.
         rot_deg = 180 if rotate else 6
-        train_tf = transforms.Compose([
-            transforms.RandomResizedCrop(IMG_SIZE, scale=(0.60, 1.0), ratio=(0.6, 1.7)),
+        steps = [transforms.RandomResizedCrop(IMG_SIZE, scale=(0.60, 1.0), ratio=(0.6, 1.7))]
+        if rotate180:
+            steps.append(transforms.RandomApply(
+                [transforms.RandomRotation((180, 180))], p=0.5))
+        steps += [
             transforms.RandomAffine(degrees=rot_deg, translate=(0.12, 0.12),
                                     scale=(0.9, 1.1), fill=0),
             transforms.ColorJitter(0.2, 0.2, 0.2),
             transforms.ToTensor(),
             transforms.Normalize(MEAN, STD),
-        ])
+        ]
+        train_tf = transforms.Compose(steps)
     else:
         # original (tight-crop) augmentation — kept so the old behaviour is reproducible
         train_tf = transforms.Compose([
@@ -114,6 +123,10 @@ def main() -> None:
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--pretrained", action="store_true",
                     help="Use ImageNet-pretrained ResNet18 (downloads weights).")
+    ap.add_argument("--freeze", action="store_true",
+                    help="FEATURE EXTRACTION: freeze the backbone, train only the "
+                         "classifier head. Use WITH --pretrained. Without this the "
+                         "run is a full FINE-TUNE (every layer learns).")
     ap.add_argument("--device", default=None)
     ap.add_argument("--out", type=Path,
                     default=OUT_DIR / "province_classifier_best.pth",
@@ -125,8 +138,11 @@ def main() -> None:
     ap.add_argument("--no-framing-aug", dest="framing_aug", action="store_false",
                     help="reproduce the old tight-crop augmentation")
     ap.add_argument("--rotate", action="store_true",
-                    help="add full rotation (degrees=180) so the classifier reads "
-                         "upside-down / sideways provinces too")
+                    help="add FULL rotation (any angle in [-180,180]). Broad but "
+                         "wasteful — see --rotate180.")
+    ap.add_argument("--rotate180", action="store_true",
+                    help="flip exactly 180 deg with p=0.5 — the targeted fix for "
+                         "upside-down plates (mirrors finetune_crnn.py --rotate180)")
     args = ap.parse_args()
     out_pth = args.out
     out_cfg = out_pth.with_name(out_pth.stem + "_config.json")
@@ -142,9 +158,13 @@ def main() -> None:
     print(f"   device {device} | epochs {args.epochs} | batch {args.batch}")
     print("=" * 60)
 
-    print(f"   output {out_pth.name} | framing_aug={args.framing_aug} | rotate={args.rotate}")
+    mode = ("feature-extraction" if (args.freeze and args.pretrained)
+            else "fine-tuning" if args.pretrained else "from-scratch")
+    print(f"   output {out_pth.name} | mode={mode} | framing_aug={args.framing_aug} | "
+          f"rotate={args.rotate} | rotate180={args.rotate180}")
     train_dl, val_dl, test_dl, train_ds = make_loaders(args.batch, args.workers,
-                                                       args.framing_aug, args.rotate)
+                                                       args.framing_aug, args.rotate,
+                                                       args.rotate180)
 
     # ImageFolder sorts class folders LEXICOGRAPHICALLY ('0','1','10',..,'2',..),
     # so its label index is NOT our numeric province id. Record the true mapping:
@@ -168,10 +188,38 @@ def main() -> None:
             model = build_resnet18(n_head)
     else:
         model = build_resnet18(n_head)
+
+    # TRANSFER LEARNING MODE (--freeze) — "feature extraction".
+    # Lock every ImageNet layer and train ONLY the new classification head, so
+    # the pretrained convolutions act as a fixed feature extractor. Contrast with
+    # the default, "fine-tuning", where the whole network keeps learning.
+    # Feature extraction is the safer choice on a small dataset (far fewer
+    # trainable parameters, so less to overfit); fine-tuning usually wins when
+    # there is enough data to adapt the features to the new domain.
+    frozen = trainable = 0
+    if args.freeze:
+        if not args.pretrained:
+            print("[!] --freeze without --pretrained freezes RANDOM weights — "
+                  "that is not feature extraction. Add --pretrained.")
+        for name, prm in model.named_parameters():
+            if not name.startswith("fc."):
+                prm.requires_grad = False
+                frozen += prm.numel()
+            else:
+                trainable += prm.numel()
+        print(f"[freeze] FEATURE EXTRACTION: {frozen:,} frozen, "
+              f"{trainable:,} trainable ({100*trainable/(frozen+trainable):.2f}% of the model)")
+    else:
+        trainable = sum(p.numel() for p in model.parameters())
+        print(f"[freeze] FINE-TUNING: all {trainable:,} parameters trainable")
     model.to(device)
 
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    # Only optimise what is actually trainable (an optimiser handed frozen
+    # params still carries their state and can silently update them via
+    # weight decay in some optimisers).
+    optimizer = torch.optim.Adam(
+        [p for p in model.parameters() if p.requires_grad], lr=args.lr)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
 
     try:

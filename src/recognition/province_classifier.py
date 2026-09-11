@@ -35,9 +35,15 @@ class ProvinceClassifier:
         if not self.weights_path.exists():
             raise FileNotFoundError(f"classifier weights not found: {self.weights_path}")
 
-        # config sits next to the weights by default
+        # Config sits next to the weights. Prefer the one named after THIS
+        # checkpoint (`<stem>_config.json`, which train_province_classifier.py
+        # writes) and only fall back to the generic name. Without this a
+        # non-default checkpoint silently loads the DEPLOYED model's config —
+        # wrong idx_to_class or img_size would scramble every prediction.
         if config_path is None:
-            config_path = self.weights_path.parent / "province_classifier_config.json"
+            stem_cfg = self.weights_path.with_name(self.weights_path.stem + "_config.json")
+            generic = self.weights_path.parent / "province_classifier_config.json"
+            config_path = stem_cfg if stem_cfg.exists() else generic
         cfg = {}
         if Path(config_path).exists():
             cfg = json.loads(Path(config_path).read_text(encoding="utf-8"))
