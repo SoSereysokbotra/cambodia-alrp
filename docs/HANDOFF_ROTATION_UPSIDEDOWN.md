@@ -1,3 +1,5 @@
+> **SUPERSEDED (2026-09-12).** Written 2026-08-19, before `check_stn.py` showed (2026-08-21) that the STN predicts a near-identity transform and contributes nothing; the upside-down ability comes from the `--rotate180` augmentation. Current truth: `docs/PRESENTATION_GUIDE.md` §3 and `metrics/experiment_log.csv`.
+
 # HANDOFF — Upside-down / rotated plate reading (for the next AI window)
 
 > **Read this first.** The previous chat ran out of tokens. This file is a complete,

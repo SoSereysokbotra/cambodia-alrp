@@ -1,3 +1,5 @@
+> **SUPERSEDED (2026-09-12).** Written 2026-07-17; several statements are now out of date (ONNX export, experiment tracking and admin-panel auth all exist; the deployed CRNN is `crnn_stn5.pth`). Current truth: `README.md`, `PROJECT_UNDERSTANDING.md`, `docs/PRESENTATION_GUIDE.md`, `metrics/experiment_log.csv`.
+
 # Cambodian ALPR — Project Overview (AI-readable context)
 
 > **Purpose of this document.** This is a self-contained description of the

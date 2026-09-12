@@ -1,3 +1,5 @@
+> **SUPERSEDED (2026-09-12).** Historical hand-off from July 2026, kept for the record. Current truth: `README.md`, `PROJECT_UNDERSTANDING.md`, `docs/RUBRIC_ALIGNMENT_PLAN.md`.
+
 # PROJECT HANDOFF — Cambodian ALPR (paste this into a new chat)
 
 You are continuing an in-progress **Cambodian Automatic License Plate Recognition
