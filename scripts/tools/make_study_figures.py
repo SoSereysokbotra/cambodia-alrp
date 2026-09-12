@@ -53,9 +53,12 @@ PALETTE = {"A": "#1f77b4", "B": "#ff7f0e", "C": "#2ca02c", "D": "#d62728"}
 
 
 def load_runs() -> list[dict]:
-    """Every run folder that has a run.json, sorted by name (A, B, C, D...)."""
+    """The main-study runs (A, B, C, D...) - every run folder with a run.json
+    EXCEPT the tune_* grid, which belongs to fig6 only."""
     runs = []
     for rj in sorted(STUDY.glob("*/run.json")):
+        if rj.parent.name.startswith("tune_"):
+            continue
         r = json.loads(rj.read_text(encoding="utf-8"))
         r["_dir"] = rj.parent
         hist = rj.parent / "history.csv"
@@ -266,7 +269,7 @@ def fig6_tuning() -> None:
     grid = np.full((len(wds), len(lrs)), np.nan)
     for r in rows:
         grid[wds.index(float(r["weight_decay"])), lrs.index(float(r["lr"]))] = 100 * float(r["best_val_acc"])
-    fig, ax = plt.subplots(figsize=(6, 4))
+    fig, ax = plt.subplots(figsize=(7, 4.2))
     im = ax.imshow(grid, cmap="viridis")
     ax.set_xticks(range(len(lrs))); ax.set_xticklabels([f"{v:g}" for v in lrs])
     ax.set_yticks(range(len(wds))); ax.set_yticklabels([f"{v:g}" for v in wds])
@@ -276,7 +279,8 @@ def fig6_tuning() -> None:
             if not np.isnan(grid[i, j]):
                 ax.text(j, i, f"{grid[i, j]:.1f}", ha="center", va="center", color="w", fontsize=10)
     fig.colorbar(im, ax=ax, label="best val accuracy (%)")
-    ax.set_title("Hyperparameter grid (selected on validation, never on test)")
+    ax.set_title("Approach C: lr x weight decay (selected on validation, never on test)",
+                 fontsize=9)
     fig.tight_layout()
     fig.savefig(FIGS / "fig6_tuning_heatmap.png", dpi=150)
     plt.close(fig)
@@ -288,7 +292,7 @@ def main() -> None:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--best", default=None,
                     help="run_name to use for the confusion / per-class / failure figures "
-                         "(default: highest test accuracy)")
+                         "(default: highest VALIDATION accuracy - never chosen on test)")
     args = ap.parse_args()
 
     FIGS.mkdir(parents=True, exist_ok=True)
@@ -298,7 +302,7 @@ def main() -> None:
     fig2_curves(runs)
 
     best = (next(r for r in runs if r["run_name"] == args.best) if args.best
-            else max(runs, key=lambda r: r["test_acc"]))
+            else max(runs, key=lambda r: r["best_val_acc"]))
     preds = load_predictions(best)
     if preds:
         fig3_confusion(best, preds)

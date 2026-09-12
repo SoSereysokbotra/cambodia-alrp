@@ -100,12 +100,24 @@ The clean subset excludes the 76 test crops whose source photo also appears in t
 ![test accuracy per approach](results/province_study/figures/fig1_test_accuracy.png)
 ![learning curves](results/province_study/figures/fig2_learning_curves.png)
 
-Hyperparameter grid (approach C): <!-- TODO: 2–3 sentences: what was tried, which config won on validation, what the curves showed --> — see `results/province_study/tuning.csv` and `figures/fig6_tuning_heatmap.png`.
+**Hyperparameter grid (approach C).** lr {1e-4, 3e-4, 1e-3} × weight decay {0, 1e-4}, 6 runs, 40 epochs, seed 42, selected on **validation** accuracy (`results/province_study/tuning.csv`):
+
+| lr | wd = 0 | wd = 1e-4 |
+|---|---|---|
+| 1e-4 | 92.6 % val / 94.0 % test *(= run C)* | 93.2 % / 94.5 % |
+| 3e-4 | 95.3 % / 97.0 % | 94.9 % / 95.9 % |
+| **1e-3** | **96.6 % val / 96.5 % test ← selected** | 96.0 % / 95.4 % |
+
+What it shows: the conventional "low LR for fine-tuning" (1e-4) was the *worst* setting — with the whole network trainable, 2.5 k images and a 10-epoch StepLR schedule, the model simply under-trains at 1e-4 (best epoch 31, val still rising). A 10× larger LR gains **+4 points of validation accuracy**. Weight decay 1e-4 is consistently slightly worse (−0.4 to −0.6 val): the augmentation already regularises enough. The winner over-fits mildly (train 99.1 %, val 96.2 %, val loss 0.14) with best epoch 33. lr 3e-4 has a *higher test* score (97.0 %) but a lower validation score; the validation-selected model is the one reported. The lr 1e-4 / wd 0 cell reproduces run C to the digit (92.63 / 94.00), confirming the seeding.
+
+**Final model:** ResNet18, ImageNet fine-tune, lr 1e-3, wd 0 → **96.5 % test accuracy** (`results/province_study/tune_lr0.001_wd0/`).
+
+![tuning heatmap](results/province_study/figures/fig6_tuning_heatmap.png)
 
 ## 6. Discussion and error analysis
 
 **Why C (and A) won — and why B and D failed.**
-- **Full fine-tuning ≈ from scratch (94.0 % vs 93.3 %; McNemar exact test p = 0.63, 17 vs 21 discordant crops).** With 2 515 training images the network can learn Khmer glyph features from random initialisation; ImageNet weights mainly buy **convergence speed** — C passes 85 % validation accuracy at epoch 5, A needs ~20 epochs (`fig2`). Same capacity, same data, same end point.
+- **Full fine-tuning ≈ from scratch (94.0 % vs 93.3 %; McNemar exact test p = 0.63, 17 vs 21 discordant crops).** With 2 515 training images the network can learn Khmer glyph features from random initialisation; ImageNet weights mainly buy **convergence speed** — C passes 85 % validation accuracy at epoch 5, A needs ~20 epochs (`fig2`). Same capacity, same data, same end point. A actually has the higher *validation* score (93.8 vs 92.6); C was carried into the tuning grid because it converges ~4× faster, which makes a 6-run grid cheap — and the detail figures below are for C for the same reason.
 - **A frozen ImageNet backbone collapses (42.0 %).** With only the 13 338-parameter head training, the model is limited to whatever ImageNet's convolutional features already separate. Those features encode natural-image textures and object parts, not the stroke topology of Khmer script — the low-level filters themselves must adapt (domain shift; the inductive bias of ImageNet features does not transfer). The curve is flat under-fitting: train 46.6 %, val 38.0 %, both still rising slowly at epoch 40.
 - **The small CNN under-fits (46.6 %).** Train accuracy only reaches 58.9 % — this is a **capacity** failure, not over-fitting: four conv blocks (0.4 M params) cannot represent 26 visually similar Khmer words at 128 px. Depth and residual connections matter here, not just "a CNN".
 - **Over-fitting is present but mild in A and C:** train 97–99 % vs val 92 %, train loss → 0.02–0.10 while val loss levels at 0.26–0.29 from epoch ~15 — augmentation and StepLR keep the gap bounded; the best-validation epoch (31 / 38) is saved, not the last.
