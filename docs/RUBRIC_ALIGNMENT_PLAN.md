@@ -50,20 +50,20 @@ proven to be a no-op. Don't build the grade on it.
 
 File: `scripts/recognition/train_province_classifier.py`
 
-- [ ] **Seeds** — add `--seed 42` and at the top of `main()`:
+- [x] **Seeds** — add `--seed 42` and at the top of `main()`:
       `random.seed`, `np.random.seed`, `torch.manual_seed`, `torch.cuda.manual_seed_all`,
       `torch.backends.cudnn.deterministic = True`, `cudnn.benchmark = False`.
       Also seed the DataLoader (`generator=torch.Generator().manual_seed(seed)`).
-- [ ] **`--arch {resnet18, small_cnn}`** — add a `SmallCNN` class (e.g. 4 × [Conv3×3 → BN → ReLU → MaxPool], 32→64→128→256 channels, global-avg-pool, Linear(256, 26)). Put it in `src/recognition/province_classifier.py` next to `build_resnet18` so inference can load it too.
-- [ ] **`--weight-decay`** (default 0) passed to Adam — this is the "one regularization choice" the rubric requires you to tune.
-- [ ] **Per-epoch CSV log** — write `results/province_study/<run>/history.csv` with columns
+- [x] **`--arch {resnet18, small_cnn}`** — add a `SmallCNN` class (e.g. 4 × [Conv3×3 → BN → ReLU → MaxPool], 32→64→128→256 channels, global-avg-pool, Linear(256, 26)). Put it in `src/recognition/province_classifier.py` next to `build_resnet18` so inference can load it too.
+- [x] **`--weight-decay`** (default 0) passed to Adam — this is the "one regularization choice" the rubric requires you to tune.
+- [x] **Per-epoch CSV log** — write `results/province_study/<run>/history.csv` with columns
       `epoch, train_loss, train_acc, val_loss, val_acc, lr, epoch_sec`. (Currently only prints.) Compute **train accuracy** and **val loss** — both are missing today.
-- [ ] **Run metadata JSON** — `results/province_study/<run>/run.json`: arch, strategy, seed, lr, weight_decay, epochs, batch, **trainable params**, **total params**, **training wall-time**, **GPU name** (`torch.cuda.get_device_name(0)`), best epoch, best val acc, **test acc**, **test macro-F1**.
-- [ ] **Test predictions dump** — `results/province_study/<run>/test_predictions.csv`
+- [x] **Run metadata JSON** — `results/province_study/<run>/run.json`: arch, strategy, seed, lr, weight_decay, epochs, batch, **trainable params**, **total params**, **training wall-time**, **GPU name** (`torch.cuda.get_device_name(0)`), best epoch, best val acc, **test acc**, **test macro-F1**.
+- [x] **Test predictions dump** — `results/province_study/<run>/test_predictions.csv`
       (`image, true_class, pred_class, confidence`) so confusion matrices and error galleries can be built offline without re-running.
-- [ ] **Checkpoint resume** — save `last.pth` every epoch (model + optimizer + epoch) and add `--resume` to continue after a Colab disconnect. (`best.pth` is already saved.)
-- [ ] Keep the **eval transform identical** for all runs (already true — do not add trim here).
-- [ ] Use `--no-framing-aug` for the study? **Decision: no.** Use the *same* train augmentation for all four runs (framing aug ON, as deployed) so augmentation is not a confound. State this in the README.
+- [x] **Checkpoint resume** — save `last.pth` every epoch (model + optimizer + epoch) and add `--resume` to continue after a Colab disconnect. (`best.pth` is already saved.)
+- [x] Keep the **eval transform identical** for all runs (already true — do not add trim here).
+- [x] Use `--no-framing-aug` for the study? **Decision: no.** Use the *same* train augmentation for all four runs (framing aug ON, as deployed) so augmentation is not a confound. State this in the README.
 
 **Definition of done:** one command runs one approach end-to-end and leaves
 `history.csv`, `run.json`, `test_predictions.csv`, `best.pth`, `last.pth` in its
@@ -85,7 +85,7 @@ Fixed for all runs: `--epochs 40 --batch 32 --seed 42`, same split, same augment
 - [ ] Copy each run folder back into `results/province_study/` and **commit it**
       (CSV/JSON/PNG are small; `.pth` files are 35–45 MB — under the 50 MB rule, so they *may* be committed, or upload to Drive and put the link in the README).
 - [ ] Append one row per run to `metrics/experiment_log.csv` (`component=province_study`).
-- [ ] Re-run `make_colab_bundle.py` first so Colab gets the new script.
+- [x] Re-run `make_colab_bundle.py` first so Colab gets the new script.
 
 Expected budget: ResNet18 on 2.5 k × 128 px images ≈ 5–10 min per 40-epoch run on a T4. Whole phase < 1 h.
 
@@ -122,7 +122,7 @@ New script: `scripts/tools/make_study_figures.py` → `results/province_study/fi
       - B fails → ImageNet features are built for natural-image textures; Khmer glyph shapes need re-learned low-level filters (inductive bias / domain shift).
       - C ≈ A → 2.5 k images are enough to learn from scratch; pretraining mainly speeds convergence (show epochs-to-90 % from the curves).
       - D vs A → capacity: does a 0.3 M-param CNN match an 11 M-param ResNet on 128 px crops?
-- [ ] **Limitations** paragraph: public dataset not purpose-collected; 34.9 % near-duplicate rate found in the *CRNN* split — state whether the province split was audited the same way (**do this audit**: same plate number in train and test province crops? `check_leakage.py` logic applied to `province_crops`); class imbalance; 567-image test set → ±3–4 pt CI; no tilt labels.
+- [x] **Limitations** paragraph: public dataset not purpose-collected; 34.9 % near-duplicate rate found in the *CRNN* split — state whether the province split was audited the same way (**done 2026-09-12**: `scripts/tools/check_province_leakage.py` — **76/567 = 13.4 %** of test crops share a source photo with train/val, 0 byte-identical; root cause: crop-level split. `summary.md` reports a clean-subset accuracy per approach); class imbalance; 567-image test set → ±3–4 pt CI; no tilt labels.
 - [ ] **Future work**, prioritised: collect real photos for the 5 smallest classes; rotation-trained classifier (`rot2`, already measured 93 % upside-down) into the pipeline; a ViT / ConvNeXt as a third architecture.
 
 ---

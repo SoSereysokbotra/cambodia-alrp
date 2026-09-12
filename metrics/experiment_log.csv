@@ -237,3 +237,4 @@ timestamp,git_commit,component,metric,value,split,notes
 2026-08-21T23:51:39,4c8d406,crnn,word_accuracy_upright,0.8725,real-test-all,"crnn_stn5.pth, n=149"
 2026-08-21T23:51:39,4c8d406,crnn,word_accuracy_upsidedown,0.5168,real-test-all,"crnn_stn5.pth, n=149"
 2026-08-21T23:51:39,4c8d406,dataset,test_leaked_crop_fraction,0.3490,real-test,
+2026-09-12T16:06:40,1bedca1,dataset,province_test_leaked_crop_fraction,0.1340,province-test,76/567 crops share a source photo with train/val; 0 byte-identical
