@@ -78,13 +78,13 @@ the new flags and **keep its outputs saved** this time).
 
 Fixed for all runs: `--epochs 40 --batch 32 --seed 42`, same split, same augmentation.
 
-- [ ] A `--arch resnet18` (no `--pretrained`)                          `--lr 1e-3`
-- [ ] B `--arch resnet18 --pretrained --freeze`                       `--lr 1e-3`
-- [ ] C `--arch resnet18 --pretrained`                                `--lr 1e-4`
-- [ ] D `--arch small_cnn`                                            `--lr 1e-3`
-- [ ] Copy each run folder back into `results/province_study/` and **commit it**
+- [x] A `--arch resnet18` (no `--pretrained`)                          `--lr 1e-3`
+- [x] B `--arch resnet18 --pretrained --freeze`                       `--lr 1e-3`
+- [x] C `--arch resnet18 --pretrained`                                `--lr 1e-4`
+- [x] D `--arch small_cnn`                                            `--lr 1e-3`
+- [x] Copy each run folder back into `results/province_study/` and **commit it**
       (CSV/JSON/PNG are small; `.pth` files are 35–45 MB — under the 50 MB rule, so they *may* be committed, or upload to Drive and put the link in the README).
-- [ ] Append one row per run to `metrics/experiment_log.csv` (`component=province_study`).
+- [x] Append one row per run to `metrics/experiment_log.csv` (`component=province_study`).
 - [x] Re-run `make_colab_bundle.py` first so Colab gets the new script.
 
 Expected budget: ResNet18 on 2.5 k × 128 px images ≈ 5–10 min per 40-epoch run on a T4. Whole phase < 1 h.
@@ -104,21 +104,21 @@ Expected budget: ResNet18 on 2.5 k × 128 px images ≈ 5–10 min per 40-epoch 
 
 New script: `scripts/tools/make_study_figures.py` → `results/province_study/figures/`
 
-- [ ] `fig1_test_accuracy_bar.png` — A/B/C/D test accuracy + macro-F1, error bars if seeds were repeated.
-- [ ] `fig2_learning_curves.png` — overlaid train vs val **loss** and **accuracy** per approach (2×2 grid or two panels). This is where you *show* under-fitting (B plateaus) vs over-fitting (A: train ≫ val).
-- [ ] `fig3_confusion_matrix_C.png` — normalised, 26×26, for the winner.
-- [ ] `fig4_per_class_accuracy.png` — bar chart sorted by train-set size, so imbalance ↔ accuracy is visible.
-- [ ] `fig5_failure_gallery.png` — 12–16 worst misclassified test crops with true/pred labels.
+- [x] `fig1_test_accuracy_bar.png` — A/B/C/D test accuracy + macro-F1, error bars if seeds were repeated.
+- [x] `fig2_learning_curves.png` — overlaid train vs val **loss** and **accuracy** per approach (2×2 grid or two panels). This is where you *show* under-fitting (B plateaus) vs over-fitting (A: train ≫ val).
+- [x] `fig3_confusion_matrix_C.png` — normalised, 26×26, for the winner.
+- [x] `fig4_per_class_accuracy.png` — bar chart sorted by train-set size, so imbalance ↔ accuracy is visible.
+- [x] `fig5_failure_gallery.png` — 12–16 worst misclassified test crops with true/pred labels.
 - [ ] `fig6_tuning_heatmap.png` — lr × weight_decay → val accuracy.
-- [ ] Every figure: axis labels, units, legend, title, readable at slide size. Same colour per approach across all figures.
+- [x] Every figure: axis labels, units, legend, title, readable at slide size. Same colour per approach across all figures.
 
 ---
 
 ## 5. Error analysis and discussion (write once, reuse in README + slides)
 
-- [ ] Per-class table from `test_predictions.csv`: which provinces fail, and are they the low-data classes (Mondul Kiri 18, Ratanakiri 20, Kep 42)? Quantify the correlation.
-- [ ] Look at the failure gallery: name the causes (visually similar Khmer names, blur, box catching the number line, "other" class absorbing province plates).
-- [ ] Explain the ranking with course concepts:
+- [x] Per-class table from `test_predictions.csv`: which provinces fail, and are they the low-data classes (Mondul Kiri 18, Ratanakiri 20, Kep 42)? Quantify the correlation.
+- [x] Look at the failure gallery: name the causes (visually similar Khmer names, blur, box catching the number line, "other" class absorbing province plates).
+- [x] Explain the ranking with course concepts:
       - B fails → ImageNet features are built for natural-image textures; Khmer glyph shapes need re-learned low-level filters (inductive bias / domain shift).
       - C ≈ A → 2.5 k images are enough to learn from scratch; pretraining mainly speeds convergence (show epochs-to-90 % from the curves).
       - D vs A → capacity: does a 0.3 M-param CNN match an 11 M-param ResNet on 128 px crops?
@@ -131,18 +131,18 @@ New script: `scripts/tools/make_study_figures.py` → `results/province_study/fi
 
 Rewrite `README.md` in this order. Keep the current system content but move it *below* the study.
 
-- [ ] Title + **your name** + course + lecturer.
-- [ ] Problem statement: **input → output** ("128×128 RGB crop of the Khmer province line → one of 26 classes"), problem type (multi-class image classification), why it matters (ALPR context, 2 sentences).
-- [ ] Dataset: source + **license** (Plate_v4, CC BY 4.0), how crops were produced (`build_province_dataset.py`), counts per split, **class-distribution table or figure** (from `manifest.json`), known noise/bias (imbalance, near-duplicates, "other" class). Fix the false sentence "photographed and labelled for this project".
-- [ ] Approaches compared: the A/B/C/D table with params, training time, hardware.
-- [ ] **Results table** (single table, same test set, same metrics) + the two headline figures embedded.
+- [x] Title + **your name** + course + lecturer.
+- [x] Problem statement: **input → output** ("128×128 RGB crop of the Khmer province line → one of 26 classes"), problem type (multi-class image classification), why it matters (ALPR context, 2 sentences).
+- [x] Dataset: source + **license** (Plate_v4, CC BY 4.0), how crops were produced (`build_province_dataset.py`), counts per split, **class-distribution table or figure** (from `manifest.json`), known noise/bias (imbalance, near-duplicates, "other" class). Fix the false sentence "photographed and labelled for this project".
+- [x] Approaches compared: the A/B/C/D table with params, training time, hardware.
+- [x] **Results table** (single table, same test set, same metrics) + the two headline figures embedded.
 - [ ] Hyperparameter tuning summary + link to `tuning.csv`.
-- [ ] Error analysis + limitations (short version, link to full).
-- [ ] **How to run every experiment** — one command per approach + the figure script + `score_pipeline.py` for the system.
+- [x] Error analysis + limitations (short version, link to full).
+- [x] **How to run every experiment** — one command per approach + the figure script + `score_pipeline.py` for the system.
 - [ ] Weights: Drive links (or note they are committed).
-- [ ] Citations: Plate_v4, Ultralytics YOLOv10, torchvision ResNet18, `third_party/yolov10`, the three papers in PRESENTATION_GUIDE §7.
-- [ ] **AI-use disclosure** (mandatory): tools used (Claude via Claude Code), scope (code drafting/refactoring, docs, debugging, label transcription of *training* crops via montage sheets, analysis write-ups), verification (all numbers re-run from scripts; test labels human-verified; you can explain/modify the code). Be specific and honest — the repo's docs make the AI involvement obvious, and the rubric says fabrication/undisclosed use = zero.
-- [ ] Keep the ALPR system section, but update the stale end-to-end table to today's `score_pipeline.py` numbers (83.9 / 94.0 / 82.6) and fix `metrics/week2_metrics.json` by re-running `scripts/detection/evaluate.py`.
+- [x] Citations: Plate_v4, Ultralytics YOLOv10, torchvision ResNet18, `third_party/yolov10`, the three papers in PRESENTATION_GUIDE §7.
+- [x] **AI-use disclosure** (mandatory): tools used (Claude via Claude Code), scope (code drafting/refactoring, docs, debugging, label transcription of *training* crops via montage sheets, analysis write-ups), verification (all numbers re-run from scripts; test labels human-verified; you can explain/modify the code). Be specific and honest — the repo's docs make the AI involvement obvious, and the rubric says fabrication/undisclosed use = zero.
+- [x] Keep the ALPR system section, but update the stale end-to-end table to today's `score_pipeline.py` numbers (83.9 / 94.0 / 82.6) and fix `metrics/week2_metrics.json` by re-running `scripts/detection/evaluate.py`.
 
 ---
 
@@ -171,10 +171,10 @@ Create `slides/` and export **PDF** (plus PPTX if you have it). Suggested 14 sli
 
 ## 8. Repository hygiene
 
-- [ ] `results/province_study/` committed with CSV/JSON/PNG (`.gitignore` currently ignores nothing there — verify after adding).
+- [x] `results/province_study/` committed with CSV/JSON/PNG (`.gitignore` currently ignores nothing there — verify after adding).
 - [ ] `requirements.txt` — add `scikit-learn` (macro-F1, confusion matrix) and `pandas` if the figure script uses them; pin versions (`pip freeze` the ones you import).
 - [ ] Remove or move clutter that a marker will open: `alpr_colab_bundle.zip` (151 MB, in root — gitignored? check), `yolo26n.pt`, `scripts/tools/make_label_sheet.py.bak`, stale `models/recognition/*.bak.pth` (git-ignored anyway).
-- [ ] Mark stale docs at the top with one line: `PROJECT_OVERVIEW.md`, `HANDOFF.md`, `HANDOFF_ROTATION_UPSIDEDOWN.md` → "superseded by README / PRESENTATION_GUIDE (2026-09-12)".
+- [x] Mark stale docs at the top with one line: `PROJECT_OVERVIEW.md`, `HANDOFF.md`, `HANDOFF_ROTATION_UPSIDEDOWN.md` → "superseded by README / PRESENTATION_GUIDE (2026-09-12)".
 - [ ] **Commit after every phase** with a meaningful message. 10 of your 23 commits are on one day; from now on, small regular commits.
 - [ ] Final check: fresh clone → `pip install -r requirements.txt` → run approach C for 1 epoch → figure script runs. If that works, "anyone can reproduce" is true.
 

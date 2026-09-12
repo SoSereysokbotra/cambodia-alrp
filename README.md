@@ -86,16 +86,17 @@ Why these: A/B/C isolate the *transfer-learning strategy* on one architecture; D
 
 ## 5. Results
 
-<!-- TODO after the Colab runs: paste results/province_study/summary.md here -->
+Measured on Google Colab (Tesla T4), 40 epochs each, seed 42, identical split and augmentation. Full artefacts per run in `results/province_study/<run>/` (`history.csv`, `run.json`, `test_predictions.csv`); notebook with saved outputs: `notebooks/colab_transfer_learning.ipynb`.
 
-| run | architecture | strategy | trainable params | best epoch | val acc | **test acc** (n=567) | clean-subset acc (n=491) | macro-F1 | train time | hardware |
+| run | architecture | strategy | trainable params | best epoch | val acc | **test acc** (n=567) | clean-subset acc (n=491) | test macro-F1 | train time | hardware |
 |---|---|---|---|---|---|---|---|---|---|---|
-| A | ResNet18 | scratch | 11 189 850 | — | — | **—** | — | — | — | T4 |
-| B | ResNet18 | frozen ImageNet | 13 338 | — | — | **—** | — | — | — | T4 |
-| C | ResNet18 | ImageNet fine-tune | 11 189 850 | — | — | **—** | — | — | — | T4 |
-| D | small CNN | scratch | 396 058 | — | — | **—** | — | — | — | T4 |
+| **A** | ResNet18 | from scratch | 11 189 850 | 38 | 93.8 % | **93.3 %** | 94.7 % | 92.9 % | 6.1 min | Tesla T4 |
+| **B** | ResNet18 | ImageNet, frozen backbone | 13 338 | 39 | 40.1 % | **42.0 %** | 43.2 % | 37.9 % | 5.3 min | Tesla T4 |
+| **C** | ResNet18 | ImageNet, full fine-tune | 11 189 850 | 31 | 92.6 % | **94.0 %** | 95.3 % | 92.4 % | 5.9 min | Tesla T4 |
+| **D** | small CNN | from scratch | 396 058 | 33 | 48.4 % | **46.6 %** | 47.7 % | 40.7 % | 5.3 min | Tesla T4 |
 
-<!-- TODO: embed after running scripts/tools/make_study_figures.py -->
+The clean subset excludes the 76 test crops whose source photo also appears in train/val; the leak did **not** inflate the scores (clean accuracy is slightly *higher* — those crops come from multi-car photos and are smaller and blurrier).
+
 ![test accuracy per approach](results/province_study/figures/fig1_test_accuracy.png)
 ![learning curves](results/province_study/figures/fig2_learning_curves.png)
 
@@ -103,11 +104,20 @@ Hyperparameter grid (approach C): <!-- TODO: 2–3 sentences: what was tried, wh
 
 ## 6. Discussion and error analysis
 
-<!-- TODO after results: fill each bullet with the measured numbers -->
-- **Why the winner won** (capacity, transfer, inductive bias, data size): …
-- **Learning-curve reading** — over-fitting (train ≫ val) vs under-fitting (both plateau): …
-- **Per-class errors vs training-set size** (`figures/fig4_per_class_*.png`): …
-- **Failure gallery** (`figures/fig5_failures_*.png`) — visually similar Khmer names, blur, box catching the number line, *other* absorbing province plates: …
+**Why C (and A) won — and why B and D failed.**
+- **Full fine-tuning ≈ from scratch (94.0 % vs 93.3 %; McNemar exact test p = 0.63, 17 vs 21 discordant crops).** With 2 515 training images the network can learn Khmer glyph features from random initialisation; ImageNet weights mainly buy **convergence speed** — C passes 85 % validation accuracy at epoch 5, A needs ~20 epochs (`fig2`). Same capacity, same data, same end point.
+- **A frozen ImageNet backbone collapses (42.0 %).** With only the 13 338-parameter head training, the model is limited to whatever ImageNet's convolutional features already separate. Those features encode natural-image textures and object parts, not the stroke topology of Khmer script — the low-level filters themselves must adapt (domain shift; the inductive bias of ImageNet features does not transfer). The curve is flat under-fitting: train 46.6 %, val 38.0 %, both still rising slowly at epoch 40.
+- **The small CNN under-fits (46.6 %).** Train accuracy only reaches 58.9 % — this is a **capacity** failure, not over-fitting: four conv blocks (0.4 M params) cannot represent 26 visually similar Khmer words at 128 px. Depth and residual connections matter here, not just "a CNN".
+- **Over-fitting is present but mild in A and C:** train 97–99 % vs val 92 %, train loss → 0.02–0.10 while val loss levels at 0.26–0.29 from epoch ~15 — augmentation and StepLR keep the gap bounded; the best-validation epoch (31 / 38) is saved, not the last.
+
+**Error analysis (C, 34 errors / 567).**
+- **8 of the 34 errors (24 %) are one pair: Banteay Meanchey ↔ Oudor Meanchey.** On plates both are abbreviated — `ប.មានជ័យ` vs `ឧ.មានជ័យ` — so the whole decision rests on a single leading glyph that is often blurred (`fig5`). The other frequent pairs (Battambang ↔ Pursat, Kampong Chhnang ↔ Kampong Thom, Kampong Speu ↔ Kampong Thom) are also near-identical strings sharing a prefix word.
+- **Image quality:** most remaining failures are crops a human cannot read either — motion blur, 20-px-tall text, JPEG blocks (`fig5`, bottom rows).
+- **Class size matters, but less than expected (`fig4`):** the four provinces with ≤ 50 training crops score 90.0 % vs 94.2 % for the rest; Mondul Kiri (18 crops) is 5/5 correct, Ratanakiri (20) is 3/5. Visual similarity of the *name*, not training count, is the main driver.
+- The confusion matrix is in `results/province_study/figures/fig3_confusion_C_resnet18_finetune.png`; every individual error is in `results/province_study/C_resnet18_finetune/test_predictions.csv`.
+
+![per-class accuracy](results/province_study/figures/fig4_per_class_C_resnet18_finetune.png)
+![failure gallery](results/province_study/figures/fig5_failures_C_resnet18_finetune.png)
 
 **Limitations.** Public dataset, not purpose-collected; 13.4 % near-duplicate rate in the test split (reported, with a clean-subset score); strong class imbalance (18 vs 453 training crops); a 567-image test set gives roughly ±3–4 points of uncertainty on a 95 % score; single seed per configuration unless noted.
 
