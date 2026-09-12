@@ -59,8 +59,13 @@ yolo11*.pt
 # --- Training / inference outputs ---
 runs/
 outputs/
-results/
+results/*
 logs/
+# ...but the province comparison study (history.csv, run.json, predictions,
+# figures) is a graded deliverable and IS tracked. Only the resumable
+# checkpoint (model + optimizer state, ~90 MB) stays out.
+!results/province_study/
+results/province_study/**/last.pth
 wandb/
 *.log
 

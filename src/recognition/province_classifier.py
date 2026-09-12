@@ -27,6 +27,43 @@ def build_resnet18(n_classes: int):
     return model
 
 
+class SmallCNN(torch.nn.Module):
+    """A plain 4-block CNN trained from scratch — the low-capacity baseline in the
+    province study (~0.4 M params vs ResNet18's 11 M). Each block halves the
+    spatial size: 128 -> 64 -> 32 -> 16 -> 8, then global average pool."""
+
+    def __init__(self, n_classes: int) -> None:
+        super().__init__()
+        nn = torch.nn
+
+        def block(cin, cout):
+            return nn.Sequential(
+                nn.Conv2d(cin, cout, 3, padding=1), nn.BatchNorm2d(cout), nn.ReLU(True),
+                nn.MaxPool2d(2))
+
+        self.features = nn.Sequential(block(3, 32), block(32, 64),
+                                      block(64, 128), block(128, 256))
+        self.pool = nn.AdaptiveAvgPool2d(1)
+        self.fc = nn.Linear(256, n_classes)
+
+    def forward(self, x):
+        return self.fc(self.pool(self.features(x)).flatten(1))
+
+
+def build_model(arch: str, n_classes: int, pretrained: bool = False):
+    """Factory used by training and inference. arch: 'resnet18' | 'small_cnn'."""
+    if arch == "small_cnn":
+        return SmallCNN(n_classes)
+    if arch == "resnet18":
+        if pretrained:
+            from torchvision.models import resnet18, ResNet18_Weights
+            model = resnet18(weights=ResNet18_Weights.DEFAULT)
+            model.fc = torch.nn.Linear(model.fc.in_features, n_classes)
+            return model
+        return build_resnet18(n_classes)
+    raise ValueError(f"unknown arch: {arch!r}")
+
+
 class ProvinceClassifier:
     def __init__(self, weights_path: str | Path,
                  config_path: str | Path | None = None,
@@ -56,7 +93,8 @@ class ProvinceClassifier:
         self.std = cfg.get("std", [0.229, 0.224, 0.225])
 
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        self.model = build_resnet18(self.n_classes)
+        self.arch = str(cfg.get("arch", "resnet18"))
+        self.model = build_model(self.arch, self.n_classes)
         try:
             state = torch.load(str(self.weights_path), map_location=self.device,
                                weights_only=True)
