@@ -62,10 +62,21 @@ def main() -> None:
     ap.add_argument("--crnn-only", action="store_true",
                     help="skip the detector dataset and the synthetic set "
                          "(Colab regenerates the latter) — much smaller upload")
+    ap.add_argument("--province-only", action="store_true",
+                    help="only what the province comparison study needs "
+                         "(colab_transfer_learning.ipynb / colab_train_province.ipynb): "
+                         "src, scripts, configs, data/province_crops, deployed classifier")
     args = ap.parse_args()
 
     include_dirs = list(INCLUDE_DIRS)
-    if args.crnn_only:
+    include_files = list(INCLUDE_FILES)
+    if args.province_only:
+        include_dirs = [d for d in include_dirs
+                        if d in ("src", "scripts/recognition", "scripts/tools",
+                                 "configs", "data/province_crops")]
+        include_files = [f for f in include_files if "crnn" not in f and "charset" not in f]
+        print("[province-only] packing: " + ", ".join(include_dirs) + "\n")
+    elif args.crnn_only:
         include_dirs = [d for d in include_dirs if d not in CRNN_ONLY_DROP]
         print("[crnn-only] skipping: " + ", ".join(CRNN_ONLY_DROP))
         print("            the Colab notebook regenerates data/synthetic itself.\n")
@@ -84,7 +95,7 @@ def main() -> None:
                     z.write(p, p.relative_to(PROJECT_ROOT).as_posix())
                     n += 1
                     total += p.stat().st_size
-        for f in INCLUDE_FILES:
+        for f in include_files:
             p = PROJECT_ROOT / f
             if p.exists():
                 z.write(p, p.relative_to(PROJECT_ROOT).as_posix())
