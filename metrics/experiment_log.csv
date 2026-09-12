@@ -238,3 +238,11 @@ timestamp,git_commit,component,metric,value,split,notes
 2026-08-21T23:51:39,4c8d406,crnn,word_accuracy_upsidedown,0.5168,real-test-all,"crnn_stn5.pth, n=149"
 2026-08-21T23:51:39,4c8d406,dataset,test_leaked_crop_fraction,0.3490,real-test,
 2026-09-12T16:06:40,1bedca1,dataset,province_test_leaked_crop_fraction,0.1340,province-test,76/567 crops share a source photo with train/val; 0 byte-identical
+2026-09-12T16:52:51,07de57c,province_study,test_accuracy,0.9330,province-test,A_resnet18_scratch resnet18 from-scratch seed42 40ep T4 6.1min trainable=11189850
+2026-09-12T16:52:51,07de57c,province_study,test_macro_f1,0.9292,province-test,A_resnet18_scratch
+2026-09-12T16:52:51,07de57c,province_study,test_accuracy,0.4198,province-test,B_resnet18_frozen resnet18 feature-extraction seed42 40ep T4 5.3min trainable=13338
+2026-09-12T16:52:51,07de57c,province_study,test_macro_f1,0.3785,province-test,B_resnet18_frozen
+2026-09-12T16:52:51,07de57c,province_study,test_accuracy,0.9400,province-test,C_resnet18_finetune resnet18 fine-tuning seed42 40ep T4 5.9min trainable=11189850
+2026-09-12T16:52:51,07de57c,province_study,test_macro_f1,0.9244,province-test,C_resnet18_finetune
+2026-09-12T16:52:51,07de57c,province_study,test_accuracy,0.4656,province-test,D_smallcnn_scratch small_cnn from-scratch seed42 40ep T4 5.3min trainable=396058
+2026-09-12T16:52:51,07de57c,province_study,test_macro_f1,0.4074,province-test,D_smallcnn_scratch

@@ -1,0 +1,5 @@
+run_name,arch,mode,pretrained,frozen_backbone,lr,weight_decay,trainable_params,total_params,epochs,best_epoch,best_val_acc,test_acc,test_acc_clean,test_macro_f1,train_wall_sec,hardware,seed
+A_resnet18_scratch,resnet18,from-scratch,False,False,0.001,0.0,11189850,11189850,40,38,0.93762,0.93298,0.9470468431771895,0.92918,365.8,Tesla T4,42
+B_resnet18_frozen,resnet18,feature-extraction,True,True,0.001,0.0,13338,11189850,40,39,0.40076,0.41975,0.4317718940936864,0.37851,316.6,Tesla T4,42
+C_resnet18_finetune,resnet18,fine-tuning,True,False,0.0001,0.0,11189850,11189850,40,31,0.92628,0.94004,0.9531568228105907,0.92441,352.1,Tesla T4,42
+D_smallcnn_scratch,small_cnn,from-scratch,False,False,0.001,0.0,396058,396058,40,33,0.48393,0.46561,0.47657841140529533,0.40742,315.9,Tesla T4,42
