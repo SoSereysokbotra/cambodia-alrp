@@ -1,0 +1,7 @@
+run_name,arch,mode,lr,weight_decay,best_epoch,best_val_acc,test_acc,test_macro_f1,train_wall_sec,seed
+tune_lr0.0001_wd0,resnet18,fine-tuning,0.0001,0.0,31,0.92628,0.94004,0.92441,319.0,42
+tune_lr0.0001_wd0.0001,resnet18,fine-tuning,0.0001,0.0001,36,0.93195,0.94533,0.93023,320.3,42
+tune_lr0.0003_wd0,resnet18,fine-tuning,0.0003,0.0,15,0.95274,0.97002,0.9655,324.4,42
+tune_lr0.0003_wd0.0001,resnet18,fine-tuning,0.0003,0.0001,27,0.94896,0.95944,0.95351,324.0,42
+tune_lr0.001_wd0,resnet18,fine-tuning,0.001,0.0,33,0.96597,0.96473,0.96043,321.9,42
+tune_lr0.001_wd0.0001,resnet18,fine-tuning,0.001,0.0001,35,0.9603,0.95414,0.95058,321.9,42

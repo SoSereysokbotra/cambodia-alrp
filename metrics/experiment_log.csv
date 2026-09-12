@@ -246,3 +246,9 @@ timestamp,git_commit,component,metric,value,split,notes
 2026-09-12T16:52:51,07de57c,province_study,test_macro_f1,0.9244,province-test,C_resnet18_finetune
 2026-09-12T16:52:51,07de57c,province_study,test_accuracy,0.4656,province-test,D_smallcnn_scratch small_cnn from-scratch seed42 40ep T4 5.3min trainable=396058
 2026-09-12T16:52:51,07de57c,province_study,test_macro_f1,0.4074,province-test,D_smallcnn_scratch
+2026-09-12T17:56:04,2bf18af,province_study,tune_test_accuracy,0.9400,province-test,tune_lr0.0001_wd0 val=0.9263 (selected on val; winner lr1e-3 wd0)
+2026-09-12T17:56:04,2bf18af,province_study,tune_test_accuracy,0.9453,province-test,tune_lr0.0001_wd0.0001 val=0.9319 (selected on val; winner lr1e-3 wd0)
+2026-09-12T17:56:04,2bf18af,province_study,tune_test_accuracy,0.9700,province-test,tune_lr0.0003_wd0 val=0.9527 (selected on val; winner lr1e-3 wd0)
+2026-09-12T17:56:04,2bf18af,province_study,tune_test_accuracy,0.9594,province-test,tune_lr0.0003_wd0.0001 val=0.9490 (selected on val; winner lr1e-3 wd0)
+2026-09-12T17:56:04,2bf18af,province_study,tune_test_accuracy,0.9647,province-test,tune_lr0.001_wd0 val=0.9660 (selected on val; winner lr1e-3 wd0)
+2026-09-12T17:56:04,2bf18af,province_study,tune_test_accuracy,0.9541,province-test,tune_lr0.001_wd0.0001 val=0.9603 (selected on val; winner lr1e-3 wd0)
