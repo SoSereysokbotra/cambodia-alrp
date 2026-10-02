@@ -44,8 +44,9 @@ import os
 import secrets
 import socket
 import sys
+import threading
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import SimpleCookie
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -64,6 +65,105 @@ from utils.database import PlateDatabase          # noqa: E402
 
 CONFIG = PROJECT_ROOT / "configs" / "system_config.yaml"
 AUTH_FILE = PROJECT_ROOT / "configs" / "admin_auth.json"   # gitignored
+
+
+# --------------------------------------------------------------------------- #
+# Live view (--live): run the real pipeline in a background thread and serve the
+# annotated frames as MJPEG, so the whole demo — gate AND whitelist — is in one
+# browser window. Without --live the panel starts instantly and loads no models.
+# --------------------------------------------------------------------------- #
+class LiveWorker:
+    """Owns the ALPRSystem. One thread reads frames, runs the pipeline and keeps
+    the latest annotated JPEG; HTTP handlers only ever read that buffer."""
+
+    def __init__(self) -> None:
+        self.system = None
+        self.frame_jpeg: bytes | None = None
+        self.last = {}                       # last plate result, for the status strip
+        self.error: str | None = None
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self.started_at = time.time()
+
+    # -- lifecycle --------------------------------------------------------- #
+    def start(self) -> None:
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self.system is not None:
+            try:
+                self.system.camera.stop()
+                self.system.close()
+            except Exception:
+                pass
+
+    def _run(self) -> None:
+        try:
+            import cv2
+            from core.alpr_system import ALPRSystem
+            print("[live] loading models ...")
+            self.system = ALPRSystem(str(CONFIG))
+            self.system._live_dedup = True        # one audit row per car, as in run_video
+            self.system.camera.start()
+            print("[live] pipeline running")
+        except Exception as exc:                  # never kill the admin panel
+            self.error = f"{type(exc).__name__}: {exc}"
+            print(f"[live] FAILED: {self.error}")
+            return
+
+        while not self._stop.is_set():
+            frame = self.system.camera.get_frame(self.system.frame_timeout)
+            if frame is None:
+                time.sleep(0.05)
+                continue
+            try:
+                res = self.system.process_frame(frame)
+            except Exception as exc:
+                self.error = str(exc)
+                time.sleep(0.5)
+                continue
+            out = res["frame"]
+            if self.system.estop_active:
+                cv2.putText(out, "*** EMERGENCY STOP ***",
+                            (out.shape[1] // 2 - 180, 48),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 3)
+            ok, buf = cv2.imencode(".jpg", out, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+            if ok:
+                with self._lock:
+                    self.frame_jpeg = buf.tobytes()
+                    self.last = (res["plates"][0] if res["plates"] else {}) | {
+                        "total_ms": round(res["total_ms"], 1)}
+
+    # -- read side --------------------------------------------------------- #
+    def jpeg(self) -> bytes | None:
+        with self._lock:
+            return self.frame_jpeg
+
+    def status(self) -> dict:
+        with self._lock:
+            p = dict(self.last)
+        s = self.system
+        if s is None:
+            return {"ready": False, "error": self.error}
+        st = s.get_session_stats()
+        return {
+            "ready": True, "error": self.error,
+            "plate": p.get("plate_text", "—"),
+            "action": p.get("action", "—"),
+            "crnn": p.get("crnn_confidence"),
+            "latency_ms": p.get("total_ms"),
+            "estop": bool(s.estop_active),
+            "processed": st["processed"], "allowed": st["allowed"],
+            "denied": st["denied"], "review": st["review"],
+            "gate": st["gate_status"],
+            "uptime_sec": round(time.time() - self.started_at),
+        }
+
+
+LIVE: LiveWorker | None = None       # set by main() when --live is passed
 
 # --------------------------------------------------------------------------- #
 # Authentication (PLAN_V2 Phase 6.1)
@@ -214,6 +314,110 @@ LOGIN_PAGE = Template("""<!doctype html>
   </div>
 </body></html>""")
 
+LIVE_PAGE = Template("""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ALPR — Live gate</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, "Segoe UI", "Noto Sans Khmer", sans-serif;
+         margin: 0; padding: 1rem; max-width: 1200px; margin-inline: auto;
+         background: #0f1115; color: #e7e9ee; }
+  h1 { font-size: 1.4rem; margin: 0 0 .2rem; }
+  .sub { color: #9aa3b2; font-size: .9rem; }
+  nav { display: flex; gap: .5rem; margin: .8rem 0 1rem; }
+  nav a { padding: .45rem .9rem; border-radius: 8px; text-decoration: none;
+          font-weight: 600; font-size: .9rem; background: #161a22;
+          color: #9aa3b2; border: 1px solid #232838; }
+  nav a.on { background: #2f6d7d; color: #fff; border-color: #2f6d7d; }
+  .wrap { display: grid; grid-template-columns: 1fr 340px; gap: 1rem; }
+  @media (max-width: 900px) { .wrap { grid-template-columns: 1fr; } }
+  .card { background: #161a22; border: 1px solid #232838; border-radius: 10px;
+          padding: 1rem; }
+  img#cam { width: 100%; border-radius: 8px; display: block; background: #000; }
+  .big { font-size: 1.5rem; font-weight: 700; word-break: break-all; }
+  .pill { display: inline-block; padding: .15rem .6rem; border-radius: 999px;
+          font-size: .8rem; font-weight: 700; }
+  .ok { background: #12351f; color: #46d17f; }
+  .bad { background: #3a1b1b; color: #ff6b6b; }
+  .warn { background: #3a3119; color: #e3b341; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; margin-top: .8rem; }
+  .stat { background: #0f1115; border: 1px solid #232838; border-radius: 8px;
+          padding: .5rem .7rem; }
+  .stat b { display: block; font-size: 1.25rem; }
+  .stat span { color: #9aa3b2; font-size: .75rem; }
+  button { cursor: pointer; border: 0; border-radius: 8px; padding: .7rem 1rem;
+           font-size: .95rem; font-weight: 700; color: #fff; width: 100%; }
+  .b-open { background: #2f7d46; } .b-stop { background: #a33; }
+  form { margin-top: .6rem; }
+  .err { background: #3a1b1b; color: #ff9a9a; padding: .6rem .8rem;
+         border-radius: 8px; margin-bottom: 1rem; font-size: .9rem; }
+</style></head><body>
+<h1>Live gate</h1>
+<div class="sub">{{ source }}</div>
+<nav>
+  <a href="/live" class="on">Live gate</a>
+  <a href="/">Whitelist &amp; audit log</a>
+  <a href="/logout">Sign out</a>
+</nav>
+{% if error %}<div class="err">Pipeline error: {{ error }}</div>{% endif %}
+<div class="wrap">
+  <div class="card">
+    <img id="cam" src="/stream" alt="live camera">
+  </div>
+  <div>
+    <div class="card">
+      <div class="sub">last read</div>
+      <div class="big" id="plate">—</div>
+      <div style="margin-top:.5rem">
+        <span class="pill" id="action">—</span>
+        <span class="sub" id="conf"></span>
+      </div>
+      <div class="grid">
+        <div class="stat"><b id="allowed">0</b><span>allowed</span></div>
+        <div class="stat"><b id="denied">0</b><span>denied</span></div>
+        <div class="stat"><b id="review">0</b><span>review</span></div>
+        <div class="stat"><b id="latency">—</b><span>ms / frame</span></div>
+      </div>
+    </div>
+    <div class="card" style="margin-top:1rem">
+      <div class="sub">operator controls</div>
+      <form method="post" action="/live_open">
+        <button class="b-open">MANUAL OPEN</button>
+      </form>
+      <form method="post" action="/live_estop">
+        <button class="b-stop" id="estop">EMERGENCY STOP</button>
+      </form>
+    </div>
+  </div>
+</div>
+<script>
+async function tick() {
+  try {
+    const r = await fetch('/live_status.json', {cache: 'no-store'});
+    const s = await r.json();
+    if (!s.ready) return;
+    document.getElementById('plate').textContent   = s.plate || '—';
+    document.getElementById('allowed').textContent = s.allowed;
+    document.getElementById('denied').textContent  = s.denied;
+    document.getElementById('review').textContent  = s.review;
+    document.getElementById('latency').textContent = s.latency_ms ?? '—';
+    document.getElementById('conf').textContent    =
+        s.crnn != null ? ('confidence ' + s.crnn) : '';
+    const a = document.getElementById('action');
+    a.textContent = s.action || '—';
+    a.className = 'pill ' + (s.action === 'ENTRY_ALLOWED' ? 'ok'
+                           : s.action === 'ENTRY_DENIED' ? 'bad' : 'warn');
+    document.getElementById('estop').textContent =
+        s.estop ? 'CLEAR EMERGENCY STOP' : 'EMERGENCY STOP';
+  } catch (e) {}
+}
+setInterval(tick, 1000); tick();
+</script>
+</body></html>""")
+
+
 PAGE = Template("""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -256,6 +460,18 @@ PAGE = Template("""<!doctype html>
   <div class="sub">{{ n_auth }} authorized · {{ n_blocked }} blocked · {{ n_total }} total.
     A live plate opens the gate only if its composed text <b>exactly</b> matches an
     authorized row and confidence ≥ 0.70.</div>
+
+  <nav style="display:flex;gap:.5rem;margin:.9rem 0 .2rem">
+    {% if live %}<a href="/live" style="padding:.45rem .9rem;border-radius:8px;
+       text-decoration:none;font-weight:600;font-size:.9rem;background:#161a22;
+       color:#9aa3b2;border:1px solid #232838">Live gate</a>{% endif %}
+    <a href="/" style="padding:.45rem .9rem;border-radius:8px;text-decoration:none;
+       font-weight:600;font-size:.9rem;background:#2f6d7d;color:#fff;
+       border:1px solid #2f6d7d">Whitelist &amp; audit log</a>
+    <a href="/logout" style="padding:.45rem .9rem;border-radius:8px;
+       text-decoration:none;font-weight:600;font-size:.9rem;background:#161a22;
+       color:#9aa3b2;border:1px solid #232838">Sign out</a>
+  </nav>
 
   {% if msg %}<div class="msg {{ msg_kind }}">{{ msg }}</div>{% endif %}
 
@@ -372,9 +588,13 @@ _ACT_CLS = {"ENTRY_ALLOWED": "a-allow", "ENTRY_DENIED": "a-deny",
             "REVIEW_REQUIRED": "a-review"}
 
 
-def _db() -> PlateDatabase:
+def _cfg() -> dict:
     import yaml
-    cfg = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
+    return yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
+
+
+def _db() -> PlateDatabase:
+    cfg = _cfg()
     p = Path(cfg.get("db_path", "plates.db"))
     return PlateDatabase(str(p if p.is_absolute() else PROJECT_ROOT / p))
 
@@ -413,7 +633,8 @@ def render(db: PlateDatabase, q: str = "", action_f: str = "",
         n_auth=len(authorized), n_blocked=len(blocked), n_total=len(plates),
         reads=reads, candidates=candidates, inside=db.active_sessions(),
         n_reads_total=n_reads_total,
-        q=q, action_f=action_f, actions=ACTIONS, msg=msg, msg_kind=msg_kind)
+        q=q, action_f=action_f, actions=ACTIONS, msg=msg, msg_kind=msg_kind,
+        live=LIVE is not None)
     return html.encode("utf-8")
 
 
@@ -451,6 +672,51 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
         except self._CLIENT_GONE:
             self.close_connection = True   # browser closed the tab — nothing to send
+
+    # -- live view --------------------------------------------------------- #
+    def _send_json(self, obj: dict):
+        body = json.dumps(obj).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_live(self):
+        if LIVE is None:
+            self._send(b"<h1>Live view is off</h1><p>Restart with "
+                       b"<code>--live</code> to load the pipeline.</p>"
+                       b"<p><a href='/'>Back to the whitelist</a></p>", status=404)
+            return
+        src = _cfg().get("camera_source", "?")
+        body = LIVE_PAGE.render(source=f"source: {src}", error=LIVE.error).encode("utf-8")
+        self._send(body)
+
+    def _send_stream(self):
+        """MJPEG: multipart/x-mixed-replace. Every browser renders this in an
+        <img> with no JavaScript, which is why it beats a WebSocket here."""
+        if LIVE is None:
+            self._send(b"live view is off", status=404)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type",
+                         "multipart/x-mixed-replace; boundary=frame")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        try:
+            while True:
+                jpg = LIVE.jpeg()
+                if jpg is None:
+                    time.sleep(0.1)
+                    continue
+                self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\n"
+                                 b"Content-Length: " + str(len(jpg)).encode() + b"\r\n\r\n")
+                self.wfile.write(jpg)
+                self.wfile.write(b"\r\n")
+                time.sleep(0.06)                  # ~16 fps to the browser
+        except (BrokenPipeError, ConnectionResetError):
+            pass                                  # the tab was closed; normal
 
     def _redirect(self, msg: str, kind: str = "ok"):
         from urllib.parse import quote
@@ -527,6 +793,16 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not self._require_auth():
             return
+        if path == "/live":
+            self._send_live()
+            return
+        if path == "/stream":
+            self._send_stream()
+            return
+        if path == "/live_status.json":
+            self._send_json(LIVE.status() if LIVE else {"ready": False,
+                                                        "error": "started without --live"})
+            return
         qs = parse_qs(urlparse(self.path).query)
         db = _db()
         try:
@@ -542,6 +818,20 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/login":
             self._do_login(form)
+            return
+        if path in ("/live_open", "/live_estop"):
+            if not self._require_auth():
+                return
+            if LIVE is None or LIVE.system is None:
+                self._redirect("live view is not running", "err")
+                return
+            if path == "/live_open":
+                LIVE.system.manual_override()     # MAN-001, logged as MANUAL_OVERRIDE
+            else:
+                LIVE.system.emergency_stop()      # MAN-002, toggles fail-safe
+            self.send_response(303)
+            self.send_header("Location", "/live")
+            self.end_headers()
             return
         if not self._require_auth():
             return
@@ -640,6 +930,10 @@ def main() -> None:
                     help="DANGEROUS: serve with no login. Loopback binds only.")
     ap.add_argument("--open", action="store_true",
                     help="open the panel in a browser once the server is listening")
+    ap.add_argument("--live", action="store_true",
+                    help="also run the ALPR pipeline and serve it at /live, so the "
+                         "gate demo and the whitelist are in one browser window. "
+                         "Loads four models (~10 s, needs the GPU).")
     args = ap.parse_args()
 
     if args.set_password:
@@ -679,7 +973,16 @@ def main() -> None:
     # first and the server bound a moment later, so the first page load always
     # failed. Now the browser is opened by a thread that fires only after the
     # server is already listening.
-    srv = HTTPServer((args.host, args.port), Handler)
+    # ThreadingHTTPServer is REQUIRED once /stream exists: an MJPEG response never
+    # ends, so a single-threaded server would serve the video and nothing else.
+    srv = ThreadingHTTPServer((args.host, args.port), Handler)
+    srv.daemon_threads = True
+
+    global LIVE
+    if args.live:
+        LIVE = LiveWorker()
+        LIVE.start()
+
     ip = _lan_ip()
     print("=" * 56)
     print(" ALPR Whitelist Admin — web panel")
@@ -688,6 +991,7 @@ def main() -> None:
     if not loopback:
         print(f"  On your phone: http://{ip}:{args.port}   (same Wi-Fi)")
     print(f"  Auth         : {'DISABLED (--no-auth)' if args.no_auth else 'password required'}")
+    print(f"  Live gate    : {'ON  -> /live' if args.live else 'off (start with --live)'}")
     print("  Ctrl+C to stop.")
     print("=" * 56)
 
@@ -707,6 +1011,9 @@ def main() -> None:
         srv.serve_forever()
     except KeyboardInterrupt:
         print("\nstopped.")
+    finally:
+        if LIVE is not None:
+            LIVE.stop()                 # release the camera and close the DB
         srv.server_close()
 
 

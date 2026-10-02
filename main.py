@@ -16,6 +16,7 @@ Or run a task directly:
     python main.py db            # view registered plates + recent reads
     python main.py inside        # parking mode: list cars currently inside
     python main.py admin         # web panel to manage the whitelist (browser)
+    python main.py admin --live  # web panel + LIVE gate view, all in the browser
     python main.py accept        # SRS acceptance test (16 checks)
     python main.py camera <url>  # set camera_source (phone URL, 0=webcam, or a folder)
     python main.py gdrive <cmd>  # Google Drive: setup|status|sync|upload|download|cleanup
@@ -144,15 +145,19 @@ def read_image(path: str | None = None) -> None:
     system.close()
 
 
-def launch_admin() -> None:
+def launch_admin(live: bool = False) -> None:
     """Start the web admin panel; it opens the browser itself once it's listening.
 
     (We do NOT open the browser here — doing so before the server bound was the
     cause of the recurring "localhost refused to connect". admin_web.py --open
     launches the browser from a thread only after the socket is ready.)
     """
-    print(" starting web admin panel (Ctrl+C to stop)...")
-    _run("admin_web.py", "--open")
+    if live:
+        print(" starting web panel WITH the live gate (loads 4 models, ~10 s)...")
+        _run("admin_web.py", "--open", "--live")
+    else:
+        print(" starting web admin panel (Ctrl+C to stop)...")
+        _run("admin_web.py", "--open")
 
 
 def view_inside() -> None:
@@ -345,6 +350,7 @@ MENU = """
   6) SRS acceptance test    (16 checks)
   7) Set camera source      (phone URL, 0=webcam, folder)
   8) Admin panel (web)      (manage whitelist in a browser)
+  w) Web demo: live + admin (everything in one browser window)
   9) Read an image          (get its exact plate text -> enroll)
   g) Google Drive           (sync, upload, download, backup)
   0) Quit
@@ -378,6 +384,8 @@ def interactive() -> None:
                 set_camera_source(url)
         elif choice == "8":
             launch_admin()
+        elif choice == "w":
+            launch_admin(live=True)
         elif choice == "9":
             read_image()
         elif choice == "g":
@@ -435,7 +443,7 @@ def main() -> None:
     elif cmd == "inside":
         view_inside()
     elif cmd == "admin":
-        launch_admin()
+        launch_admin(live="--live" in rest or "live" in rest)
     elif cmd == "read":
         read_image(rest[0] if rest else None)
     elif cmd in ("accept", "acceptance", "test"):
