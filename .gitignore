@@ -66,6 +66,9 @@ logs/
 # checkpoint (model + optimizer state, ~90 MB) stays out.
 !results/province_study/
 results/province_study/**/last.pth
+# ...and the non-plate robustness evidence (small images + the summary table),
+# so the claim "it does not read numbers off a plate" is reproducible from the repo.
+!results/nonplate/
 wandb/
 *.log
 

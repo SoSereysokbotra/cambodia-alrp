@@ -1,0 +1,23 @@
+==============================================================================
+ DOES THE SYSTEM READ NUMBERS THAT ARE NOT ON A PLATE?
+==============================================================================
+ detector confidence threshold : 0.5
+ CRNN confidence gate          : 0.7
+ plate-format validation       : True
+------------------------------------------------------------------------------
+ input                                   detected  read          decision
+------------------------------------------------------------------------------
+ blank white page                        NO        —             (pipeline never ran)
+ plate NUMBER printed on paper           NO        —             (pipeline never ran)
+ house number on a wall                  NO        —             (pipeline never ran)
+ white sign, plate-shaped, with digits   NO        —             (pipeline never ran)
+ random photo texture                    NO        —             (pipeline never ran)
+ POSITIVE CONTROL — real plate photo     YES       2C-7806       ENTRY_DENIED
+------------------------------------------------------------------------------
+ non-plate images that produced a detection : 0 of 5
+ positive control (real plate) detected     : YES   -> ENTRY_DENIED
+
+ VERDICT: the pipeline was working (the control was read) and NONE of the
+          non-plate images produced a detection. The CRNN is never reached
+          because the detector hands it nothing — it is not a general OCR.
+==============================================================================
