@@ -27,8 +27,21 @@ class PlateDatabase:
 
     def __init__(self, db_path: str | Path = "plates.db") -> None:
         self.db_path = str(db_path)
-        self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        # timeout: the live pipeline writes an audit row per frame, so a second
+        # writer (the admin panel enrolling a plate) WILL meet a held lock.
+        # Without this it raises "database is locked" immediately; with it the
+        # write waits its turn.
+        self.conn = sqlite3.connect(self.db_path, check_same_thread=False,
+                                    timeout=15.0)
         self.conn.row_factory = sqlite3.Row
+        # WAL lets readers run while a writer holds the file, which is exactly
+        # the live-view + admin-panel case. Falls back silently on a filesystem
+        # that cannot do WAL (some network shares).
+        try:
+            self.conn.execute("PRAGMA journal_mode=WAL")
+            self.conn.execute("PRAGMA synchronous=NORMAL")
+        except sqlite3.Error:
+            pass
         self._create_tables()
 
     # ------------------------------------------------------------------ #

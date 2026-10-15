@@ -110,6 +110,13 @@ configs/_gdrive_test.txt
 # --- Runtime database + backups (recreate with: python scripts/database/setup.py) ---
 plates.db
 plates.db.*
+plates.db-*
+
+# --- Presentation slides and slide build tools (local only, do not push) ---
+slides/
+scripts/tools/build_slides*.py
+authtest.txt
+
 
 # --- Evidence photos: real license plates captured at the gate. Never public. ---
 photos/*

@@ -1,8 +1,8 @@
 # Khmer Province Classification for Cambodian License Plates — a comparison of four deep-learning approaches
 
-**Student:** <!-- TODO: your full name --> (GitHub: `sobotra`) · **Course:** Deep Learning, Year 2, Kirirom Institute of Technology · **Lecturer:** Mr. Soklong HIM · **Final project, 2026**
+**Student:** So Sereysokbotra (GitHub: `SoSereysokbotra`) · **Course:** Deep Learning, Year 2, Kirirom Institute of Technology · **Lecturer:** Mr. Soklong HIM · **Final project, 2026**
 
-> Part of a working ALPR gate-control system (§8). The *graded study* is the
+> Part of a working ALPR gate-control system (§8). The _graded study_ is the
 > classifier comparison in §1–§7; the rest of the pipeline is the application it
 > serves.
 
@@ -12,55 +12,56 @@
 
 **Task.** Multi-class image classification.
 **Input:** a 128 × 128 RGB crop of the top line of a Cambodian license plate (the province name written in Khmer script).
-**Output:** one of 26 classes — the 25 Cambodian provinces, or *other* (police / military / state plates that carry no province).
+**Output:** one of 26 classes — the 25 Cambodian provinces, or _other_ (police / military / state plates that carry no province).
 
-**Why it matters.** A Cambodian plate has three lines: the Khmer province name, the number (`2A-0243`), and the English province name. The number alone does not identify a vehicle — `2A-0243` exists once per province — so a gate that admits registered cars must read the province too. Khmer script is a poor fit for a character-level sequence reader (complex glyph shaping, little training data), so the province is treated as a **whole-image classification problem**. This project asks the course question directly: *for a small, imbalanced Khmer-script dataset, which architecture and training strategy works best, and why?*
+**Why it matters.** A Cambodian plate has three lines: the Khmer province name, the number (`2A-0243`), and the English province name. The number alone does not identify a vehicle — `2A-0243` exists once per province — so a gate that admits registered cars must read the province too. Khmer script is a poor fit for a character-level sequence reader (complex glyph shaping, little training data), so the province is treated as a **whole-image classification problem**. This project asks the course question directly: _for a small, imbalanced Khmer-script dataset, which architecture and training strategy works best, and why?_
 
 ## 2. Dataset
 
-| item | value |
-|---|---|
-| source | crops cut from **Plate_v4** (`taki-dk0de`, Roboflow Universe), a public set of 3 299 Cambodian plate photos — **not self-collected** |
-| license | CC BY 4.0 |
-| how crops were made | `scripts/recognition/build_province_dataset.py` cuts each labelled province-line box to 128 × 128 and folds Plate_v4's 29 labels into 26 (Cambodia / Police / RCAF / State → *other*) |
-| samples | **2 515 train / 529 validation / 567 test** (`data/province_crops/manifest.json`); the identical split is used for every approach |
-| test-time preprocessing (all approaches) | resize 128 × 128 → ImageNet mean/std normalisation |
-| train-time augmentation (all approaches, identical) | `RandomResizedCrop` (scale 0.6–1.0) + `RandomAffine` (±6°, translate 12 %, scale 0.9–1.1) + `ColorJitter` 0.2 |
+| item                                                | value                                                                                                                                                                                 |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| source                                              | crops cut from **Plate_v4** (`taki-dk0de`, Roboflow Universe), a public set of 3 299 Cambodian plate photos — **not self-collected**                                                  |
+| license                                             | CC BY 4.0                                                                                                                                                                             |
+| how crops were made                                 | `scripts/recognition/build_province_dataset.py` cuts each labelled province-line box to 128 × 128 and folds Plate_v4's 29 labels into 26 (Cambodia / Police / RCAF / State → _other_) |
+| samples                                             | **2 515 train / 529 validation / 567 test** (`data/province_crops/manifest.json`); the identical split is used for every approach                                                     |
+| test-time preprocessing (all approaches)            | resize 128 × 128 → ImageNet mean/std normalisation                                                                                                                                    |
+| train-time augmentation (all approaches, identical) | `RandomResizedCrop` (scale 0.6–1.0) + `RandomAffine` (±6°, translate 12 %, scale 0.9–1.1) + `ColorJitter` 0.2                                                                         |
 
-**Class distribution** (imbalanced — *other* and Phnom Penh dominate; two provinces have ≤ 20 training crops):
+**Class distribution** (imbalanced — _other_ and Phnom Penh dominate; two provinces have ≤ 20 training crops):
 
-| province | train | val | test |
-|---|---|---|---|
-| Other | 453 | 97 | 98 |
-| Phnom Penh | 254 | 54 | 55 |
-| Preah Sihanouk | 148 | 31 | 33 |
-| Siem Reap | 147 | 31 | 32 |
-| Kampong Cham | 110 | 23 | 25 |
-| Prey Veng | 101 | 21 | 23 |
-| Takeo | 100 | 21 | 23 |
-| Kandal | 97 | 20 | 22 |
-| Battambang | 87 | 18 | 20 |
-| Svay Rieng | 86 | 18 | 20 |
-| Banteay Meanchey | 82 | 17 | 19 |
-| Kampong Speu | 77 | 16 | 18 |
-| Oudor Meanchey | 72 | 15 | 17 |
-| Kampong Chhnang | 70 | 15 | 16 |
-| Kampot | 70 | 15 | 15 |
-| Pursat | 67 | 14 | 16 |
-| Preah Vihear | 65 | 13 | 15 |
-| Pailin | 64 | 13 | 15 |
-| Kratie | 63 | 13 | 15 |
-| Kampong Thom | 62 | 13 | 14 |
-| Tboung Khmum | 61 | 13 | 14 |
-| Stung Treng | 52 | 11 | 12 |
-| Koh Kong | 47 | 10 | 11 |
-| Kep | 42 | 9 | 9 |
-| Ratanakiri | 20 | 4 | 5 |
-| Mondul Kiri | 18 | 4 | 5 |
-| **total** | **2 515** | **529** | **567** |
+| province         | train     | val     | test    |
+| ---------------- | --------- | ------- | ------- |
+| Other            | 453       | 97      | 98      |
+| Phnom Penh       | 254       | 54      | 55      |
+| Preah Sihanouk   | 148       | 31      | 33      |
+| Siem Reap        | 147       | 31      | 32      |
+| Kampong Cham     | 110       | 23      | 25      |
+| Prey Veng        | 101       | 21      | 23      |
+| Takeo            | 100       | 21      | 23      |
+| Kandal           | 97        | 20      | 22      |
+| Battambang       | 87        | 18      | 20      |
+| Svay Rieng       | 86        | 18      | 20      |
+| Banteay Meanchey | 82        | 17      | 19      |
+| Kampong Speu     | 77        | 16      | 18      |
+| Oudor Meanchey   | 72        | 15      | 17      |
+| Kampong Chhnang  | 70        | 15      | 16      |
+| Kampot           | 70        | 15      | 15      |
+| Pursat           | 67        | 14      | 16      |
+| Preah Vihear     | 65        | 13      | 15      |
+| Pailin           | 64        | 13      | 15      |
+| Kratie           | 63        | 13      | 15      |
+| Kampong Thom     | 62        | 13      | 14      |
+| Tboung Khmum     | 61        | 13      | 14      |
+| Stung Treng      | 52        | 11      | 12      |
+| Koh Kong         | 47        | 10      | 11      |
+| Kep              | 42        | 9       | 9       |
+| Ratanakiri       | 20        | 4       | 5       |
+| Mondul Kiri      | 18        | 4       | 5       |
+| **total**        | **2 515** | **529** | **567** |
 
 **Known noise / bias (measured, not assumed).**
-- **Near-duplicate leakage:** the split was made at *crop* level, and one photo can hold several plates, so 76 of the 567 test crops (**13.4 %**) come from a source photo that also has crops in train/val (`scripts/tools/check_province_leakage.py`; 0 byte-identical files). Every approach is scored on the full test set *and* on the 491-crop clean subset, so the comparison is fair either way.
+
+- **Near-duplicate leakage:** the split was made at _crop_ level, and one photo can hold several plates, so 76 of the 567 test crops (**13.4 %**) come from a source photo that also has crops in train/val (`scripts/tools/check_province_leakage.py`; 0 byte-identical files). Every approach is scored on the full test set _and_ on the 491-crop clean subset, so the comparison is fair either way.
 - Photos are scraped street/parking images: mixed lighting, angles, resolutions; no tilt labels.
 - Macro-F1 is reported alongside accuracy because of the imbalance.
 
@@ -68,14 +69,14 @@
 
 All four are PyTorch models trained by the same script (`scripts/recognition/train_province_classifier.py`) with the same data, augmentation, 40 epochs, batch 32, Adam, StepLR (×0.5 every 10 epochs), seed 42.
 
-| run | architecture | initial weights | what trains | trainable params | rubric dimension |
-|---|---|---|---|---|---|
-| **A** | ResNet18 | random | everything | 11 189 850 | training strategy |
-| **B** | ResNet18 | ImageNet | **only the final layer** (frozen backbone / linear probe) | 13 338 (0.12 %) | training strategy |
-| **C** | ResNet18 | ImageNet | everything, low LR (full fine-tuning) | 11 189 850 | training strategy |
-| **D** | small 4-block CNN (32→64→128→256, GAP) | random | everything | 396 058 | architecture |
+| run   | architecture                           | initial weights | what trains                                               | trainable params | rubric dimension  |
+| ----- | -------------------------------------- | --------------- | --------------------------------------------------------- | ---------------- | ----------------- |
+| **A** | ResNet18                               | random          | everything                                                | 11 189 850       | training strategy |
+| **B** | ResNet18                               | ImageNet        | **only the final layer** (frozen backbone / linear probe) | 13 338 (0.12 %)  | training strategy |
+| **C** | ResNet18                               | ImageNet        | everything, low LR (full fine-tuning)                     | 11 189 850       | training strategy |
+| **D** | small 4-block CNN (32→64→128→256, GAP) | random          | everything                                                | 396 058          | architecture      |
 
-Why these: A/B/C isolate the *transfer-learning strategy* on one architecture; D asks whether an 11 M-parameter network is even needed for 128-px glyph crops. The `SmallCNN` is defined in `src/recognition/province_classifier.py`; ResNet18 comes from torchvision.
+Why these: A/B/C isolate the _transfer-learning strategy_ on one architecture; D asks whether an 11 M-parameter network is even needed for 128-px glyph crops. The `SmallCNN` is defined in `src/recognition/province_classifier.py`; ResNet18 comes from torchvision.
 
 ## 4. Experimental setup
 
@@ -88,27 +89,27 @@ Why these: A/B/C isolate the *transfer-learning strategy* on one architecture; D
 
 Measured on Google Colab (Tesla T4), 40 epochs each, seed 42, identical split and augmentation. Full artefacts per run in `results/province_study/<run>/` (`history.csv`, `run.json`, `test_predictions.csv`); notebook with saved outputs: `notebooks/colab_transfer_learning.ipynb`.
 
-| run | architecture | strategy | trainable params | best epoch | val acc | **test acc** (n=567) | clean-subset acc (n=491) | test macro-F1 | train time | hardware |
-|---|---|---|---|---|---|---|---|---|---|---|
-| **A** | ResNet18 | from scratch | 11 189 850 | 38 | 93.8 % | **93.3 %** | 94.7 % | 92.9 % | 6.1 min | Tesla T4 |
-| **B** | ResNet18 | ImageNet, frozen backbone | 13 338 | 39 | 40.1 % | **42.0 %** | 43.2 % | 37.9 % | 5.3 min | Tesla T4 |
-| **C** | ResNet18 | ImageNet, full fine-tune | 11 189 850 | 31 | 92.6 % | **94.0 %** | 95.3 % | 92.4 % | 5.9 min | Tesla T4 |
-| **D** | small CNN | from scratch | 396 058 | 33 | 48.4 % | **46.6 %** | 47.7 % | 40.7 % | 5.3 min | Tesla T4 |
+| run   | architecture | strategy                  | trainable params | best epoch | val acc | **test acc** (n=567) | clean-subset acc (n=491) | test macro-F1 | train time | hardware |
+| ----- | ------------ | ------------------------- | ---------------- | ---------- | ------- | -------------------- | ------------------------ | ------------- | ---------- | -------- |
+| **A** | ResNet18     | from scratch              | 11 189 850       | 38         | 93.8 %  | **93.3 %**           | 94.7 %                   | 92.9 %        | 6.1 min    | Tesla T4 |
+| **B** | ResNet18     | ImageNet, frozen backbone | 13 338           | 39         | 40.1 %  | **42.0 %**           | 43.2 %                   | 37.9 %        | 5.3 min    | Tesla T4 |
+| **C** | ResNet18     | ImageNet, full fine-tune  | 11 189 850       | 31         | 92.6 %  | **94.0 %**           | 95.3 %                   | 92.4 %        | 5.9 min    | Tesla T4 |
+| **D** | small CNN    | from scratch              | 396 058          | 33         | 48.4 %  | **46.6 %**           | 47.7 %                   | 40.7 %        | 5.3 min    | Tesla T4 |
 
-The clean subset excludes the 76 test crops whose source photo also appears in train/val; the leak did **not** inflate the scores (clean accuracy is slightly *higher* — those crops come from multi-car photos and are smaller and blurrier).
+The clean subset excludes the 76 test crops whose source photo also appears in train/val; the leak did **not** inflate the scores (clean accuracy is slightly _higher_ — those crops come from multi-car photos and are smaller and blurrier).
 
 ![test accuracy per approach](results/province_study/figures/fig1_test_accuracy.png)
 ![learning curves](results/province_study/figures/fig2_learning_curves.png)
 
 **Hyperparameter grid (approach C).** lr {1e-4, 3e-4, 1e-3} × weight decay {0, 1e-4}, 6 runs, 40 epochs, seed 42, selected on **validation** accuracy (`results/province_study/tuning.csv`):
 
-| lr | wd = 0 | wd = 1e-4 |
-|---|---|---|
-| 1e-4 | 92.6 % val / 94.0 % test *(= run C)* | 93.2 % / 94.5 % |
-| 3e-4 | 95.3 % / 97.0 % | 94.9 % / 95.9 % |
+| lr       | wd = 0                                  | wd = 1e-4       |
+| -------- | --------------------------------------- | --------------- |
+| 1e-4     | 92.6 % val / 94.0 % test _(= run C)_    | 93.2 % / 94.5 % |
+| 3e-4     | 95.3 % / 97.0 %                         | 94.9 % / 95.9 % |
 | **1e-3** | **96.6 % val / 96.5 % test ← selected** | 96.0 % / 95.4 % |
 
-What it shows: the conventional "low LR for fine-tuning" (1e-4) was the *worst* setting — with the whole network trainable, 2.5 k images and a 10-epoch StepLR schedule, the model simply under-trains at 1e-4 (best epoch 31, val still rising). A 10× larger LR gains **+4 points of validation accuracy**. Weight decay 1e-4 is consistently slightly worse (−0.4 to −0.6 val): the augmentation already regularises enough. The winner over-fits mildly (train 99.1 %, val 96.2 %, val loss 0.14) with best epoch 33. lr 3e-4 has a *higher test* score (97.0 %) but a lower validation score; the validation-selected model is the one reported. The lr 1e-4 / wd 0 cell reproduces run C to the digit (92.63 / 94.00), confirming the seeding.
+What it shows: the conventional "low LR for fine-tuning" (1e-4) was the _worst_ setting — with the whole network trainable, 2.5 k images and a 10-epoch StepLR schedule, the model simply under-trains at 1e-4 (best epoch 31, val still rising). A 10× larger LR gains **+4 points of validation accuracy**. Weight decay 1e-4 is consistently slightly worse (−0.4 to −0.6 val): the augmentation already regularises enough. The winner over-fits mildly (train 99.1 %, val 96.2 %, val loss 0.14) with best epoch 33. lr 3e-4 has a _higher test_ score (97.0 %) but a lower validation score; the validation-selected model is the one reported. The lr 1e-4 / wd 0 cell reproduces run C to the digit (92.63 / 94.00), confirming the seeding.
 
 **Final model:** ResNet18, ImageNet fine-tune, lr 1e-3, wd 0 → **96.5 % test accuracy** (`results/province_study/tune_lr0.001_wd0/`).
 
@@ -117,15 +118,17 @@ What it shows: the conventional "low LR for fine-tuning" (1e-4) was the *worst* 
 ## 6. Discussion and error analysis
 
 **Why C (and A) won — and why B and D failed.**
-- **Full fine-tuning ≈ from scratch (94.0 % vs 93.3 %; McNemar exact test p = 0.63, 17 vs 21 discordant crops).** With 2 515 training images the network can learn Khmer glyph features from random initialisation; ImageNet weights mainly buy **convergence speed** — C passes 85 % validation accuracy at epoch 5, A needs ~20 epochs (`fig2`). Same capacity, same data, same end point. A actually has the higher *validation* score (93.8 vs 92.6); C was carried into the tuning grid because it converges ~4× faster, which makes a 6-run grid cheap — and the detail figures below are for C for the same reason.
+
+- **Full fine-tuning ≈ from scratch (94.0 % vs 93.3 %; McNemar exact test p = 0.63, 17 vs 21 discordant crops).** With 2 515 training images the network can learn Khmer glyph features from random initialisation; ImageNet weights mainly buy **convergence speed** — C passes 85 % validation accuracy at epoch 5, A needs ~20 epochs (`fig2`). Same capacity, same data, same end point. A actually has the higher _validation_ score (93.8 vs 92.6); C was carried into the tuning grid because it converges ~4× faster, which makes a 6-run grid cheap — and the detail figures below are for C for the same reason.
 - **A frozen ImageNet backbone collapses (42.0 %).** With only the 13 338-parameter head training, the model is limited to whatever ImageNet's convolutional features already separate. Those features encode natural-image textures and object parts, not the stroke topology of Khmer script — the low-level filters themselves must adapt (domain shift; the inductive bias of ImageNet features does not transfer). The curve is flat under-fitting: train 46.6 %, val 38.0 %, both still rising slowly at epoch 40.
 - **The small CNN under-fits (46.6 %).** Train accuracy only reaches 58.9 % — this is a **capacity** failure, not over-fitting: four conv blocks (0.4 M params) cannot represent 26 visually similar Khmer words at 128 px. Depth and residual connections matter here, not just "a CNN".
 - **Over-fitting is present but mild in A and C:** train 97–99 % vs val 92 %, train loss → 0.02–0.10 while val loss levels at 0.26–0.29 from epoch ~15 — augmentation and StepLR keep the gap bounded; the best-validation epoch (31 / 38) is saved, not the last.
 
 **Error analysis (C, 34 errors / 567).**
+
 - **8 of the 34 errors (24 %) are one pair: Banteay Meanchey ↔ Oudor Meanchey.** On plates both are abbreviated — `ប.មានជ័យ` vs `ឧ.មានជ័យ` — so the whole decision rests on a single leading glyph that is often blurred (`fig5`). The other frequent pairs (Battambang ↔ Pursat, Kampong Chhnang ↔ Kampong Thom, Kampong Speu ↔ Kampong Thom) are also near-identical strings sharing a prefix word.
 - **Image quality:** most remaining failures are crops a human cannot read either — motion blur, 20-px-tall text, JPEG blocks (`fig5`, bottom rows).
-- **Class size matters, but less than expected (`fig4`):** the four provinces with ≤ 50 training crops score 90.0 % vs 94.2 % for the rest; Mondul Kiri (18 crops) is 5/5 correct, Ratanakiri (20) is 3/5. Visual similarity of the *name*, not training count, is the main driver.
+- **Class size matters, but less than expected (`fig4`):** the four provinces with ≤ 50 training crops score 90.0 % vs 94.2 % for the rest; Mondul Kiri (18 crops) is 5/5 correct, Ratanakiri (20) is 3/5. Visual similarity of the _name_, not training count, is the main driver.
 - The confusion matrix is in `results/province_study/figures/fig3_confusion_C_resnet18_finetune.png`; every individual error is in `results/province_study/C_resnet18_finetune/test_predictions.csv`.
 
 ![per-class accuracy](results/province_study/figures/fig4_per_class_C_resnet18_finetune.png)
@@ -176,12 +179,12 @@ Camera (phone / RTSP / webcam / folder)
                                      MQTT → ESP32 gate + audit row + evidence photo
 ```
 
-| model | file | result (test split) |
-|---|---|---|
-| plate detector, YOLOv10-n | `models/detection/best.pt` | mAP50 **0.966** (504 images) |
-| number detector, YOLOv10-n | `models/detection/number_best.pt` | mAP50 **0.957** (28 images) |
-| number reader, CRNN + CTC, 38 chars | `models/recognition/crnn_stn5.pth` | word accuracy **87.2 %** upright / 51.7 % upside-down (149 crops); 84.5 % / 48.5 % on the 97 crops with no plate shared with training |
-| province classifier, ResNet18 | `models/recognition/province_classifier_best.pth` | **96.1 %** (567 crops, deployed preprocessing) |
+| model                               | file                                              | result (test split)                                                                                                                   |
+| ----------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| plate detector, YOLOv10-n           | `models/detection/best.pt`                        | mAP50 **0.966** (504 images)                                                                                                          |
+| number detector, YOLOv10-n          | `models/detection/number_best.pt`                 | mAP50 **0.957** (28 images)                                                                                                           |
+| number reader, CRNN + CTC, 38 chars | `models/recognition/crnn_stn5.pth`                | word accuracy **87.2 %** upright / 51.7 % upside-down (149 crops); 84.5 % / 48.5 % on the 97 crops with no plate shared with training |
+| province classifier, ResNet18       | `models/recognition/province_classifier_best.pth` | **96.1 %** (567 crops, deployed preprocessing)                                                                                        |
 
 **End-to-end on 149 labelled full scenes** (`scripts/tools/score_pipeline.py`, 2026-09-11): plate found 143/149; **number correct 83.9 %**, **province correct 94.0 %**, both 82.6 %. Zero gate-opens against a whitelist of 137 near-miss plates; one cross-plate misread in 143 in the number-level gate simulation (`metrics/composed_benchmark.json`). Latency ≈ 50 ms/frame on the RTX 3050.
 
@@ -191,14 +194,14 @@ Camera (phone / RTSP / webcam / folder)
 
 **Run the system.**
 
-| command | what it does |
-|---|---|
-| `python scripts/database/setup.py` | create `plates.db` with demo plates |
-| `python scripts/system/system_test.py` | readiness check: GPU, four models, DB, camera, MQTT |
-| `python main.py` | interactive menu (dashboard, demo, enroll, admin panel, acceptance test …) |
-| `python main.py demo --limit 20` | run the pipeline on real test images |
-| `python main.py read <image>` | read one image and offer to enrol it |
-| `python scripts/tools/score_pipeline.py` | end-to-end accuracy on the 149 labelled scenes |
+| command                                  | what it does                                                               |
+| ---------------------------------------- | -------------------------------------------------------------------------- |
+| `python scripts/database/setup.py`       | create `plates.db` with demo plates                                        |
+| `python scripts/system/system_test.py`   | readiness check: GPU, four models, DB, camera, MQTT                        |
+| `python main.py`                         | interactive menu (dashboard, demo, enroll, admin panel, acceptance test …) |
+| `python main.py demo --limit 20`         | run the pipeline on real test images                                       |
+| `python main.py read <image>`            | read one image and offer to enrol it                                       |
+| `python scripts/tools/score_pipeline.py` | end-to-end accuracy on the 149 labelled scenes                             |
 
 `mqtt.enabled: false` (default) runs a mock gate, so no hardware is needed. Every setting lives in `configs/system_config.yaml`. Hardware wiring: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md); requirements: [docs/srs.md](docs/srs.md); more docs in [docs/](docs/).
 
@@ -208,17 +211,18 @@ Camera (phone / RTSP / webcam / folder)
 
 ## 9. Citations
 
-- **Dataset:** *Plate_v4*, `taki-dk0de`, Roboflow Universe, CC BY 4.0. Number-line boxes (`cambodian-plate-number`, ~280 images) annotated by the author on Roboflow.
-- **YOLOv10:** A. Wang et al., *YOLOv10: Real-Time End-to-End Object Detection*, 2024 — via the Ultralytics package; base weights `yolov10n.pt`.
-- **ResNet18 / ImageNet weights:** K. He et al., *Deep Residual Learning for Image Recognition*, CVPR 2016 — `torchvision.models.resnet18(weights=ResNet18_Weights.DEFAULT)`.
-- **CRNN + CTC:** B. Shi, X. Bai, C. Yao, *An End-to-End Trainable Neural Network for Image-based Sequence Recognition*, TPAMI 2017; A. Graves et al., *Connectionist Temporal Classification*, ICML 2006.
-- **Spatial Transformer:** M. Jaderberg et al., *Spatial Transformer Networks*, NeurIPS 2015.
-- **Near-duplicate leakage in LPR:** R. Laroca et al., *Do we train on test data? The impact of near-duplicates on license plate recognition*, IJCNN 2023.
+- **Dataset:** _Plate_v4_, `taki-dk0de`, Roboflow Universe, CC BY 4.0. Number-line boxes (`cambodian-plate-number`, ~280 images) annotated by the author on Roboflow.
+- **YOLOv10:** A. Wang et al., _YOLOv10: Real-Time End-to-End Object Detection_, 2024 — via the Ultralytics package; base weights `yolov10n.pt`.
+- **ResNet18 / ImageNet weights:** K. He et al., _Deep Residual Learning for Image Recognition_, CVPR 2016 — `torchvision.models.resnet18(weights=ResNet18_Weights.DEFAULT)`.
+- **CRNN + CTC:** B. Shi, X. Bai, C. Yao, _An End-to-End Trainable Neural Network for Image-based Sequence Recognition_, TPAMI 2017; A. Graves et al., _Connectionist Temporal Classification_, ICML 2006.
+- **Spatial Transformer:** M. Jaderberg et al., _Spatial Transformer Networks_, NeurIPS 2015.
+- **Near-duplicate leakage in LPR:** R. Laroca et al., _Do we train on test data? The impact of near-duplicates on license plate recognition_, IJCNN 2023.
 - Third-party code: `third_party/yolov10/` (THU-MIG, AGPL-3.0), used only as a reference; the pipeline runs on the Ultralytics package.
 
 ## 10. AI-use disclosure
 
 <!-- TODO: read this, correct anything that is not accurate for you, then delete this comment -->
+
 - **Tools used:** Claude (Anthropic) through the Claude Code CLI / VS Code extension.
-- **Scope of use:** drafting and refactoring Python scripts and modules (training loops, evaluation tools, the pipeline wrapper), debugging (CUDA/cuDNN crashes, Windows encoding), writing documentation and planning files in `docs/`, transcribing plate numbers from montage sheets to create *training* labels for the CRNN (the 149 CRNN test labels and the 149-scene province ground truth were labelled by me), and analysis write-ups of measured results.
+- **Scope of use:** drafting and refactoring Python scripts and modules (training loops, evaluation tools, the pipeline wrapper), debugging (CUDA/cuDNN crashes, Windows encoding), writing documentation and planning files in `docs/`, transcribing plate numbers from montage sheets to create _training_ labels for the CRNN (the 149 CRNN test labels and the 149-scene province ground truth were labelled by me), and analysis write-ups of measured results.
 - **Verification:** every reported number was produced by re-running the scripts in this repository (`metrics/experiment_log.csv` records the commit for each measurement); test sets were never used for training (`finetune_crnn.py` raises on any `/test/` row; `check_leakage.py` / `check_province_leakage.py` audit near-duplicates); I have read, and can explain and modify, every line of code in `src/` and `scripts/`. All design decisions, experiments and conclusions are my own.

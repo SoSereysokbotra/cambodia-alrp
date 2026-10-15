@@ -85,6 +85,7 @@ class LiveWorker:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.started_at = time.time()
+        self._reg_plate, self._reg_val, self._reg_at = None, None, 0.0   # lookup cache
 
     # -- lifecycle --------------------------------------------------------- #
     def start(self) -> None:
@@ -138,6 +139,36 @@ class LiveWorker:
                         "total_ms": round(res["total_ms"], 1)}
 
     # -- read side --------------------------------------------------------- #
+    def _is_registered(self, plate: str) -> bool | None:
+        """Read-only whitelist lookup, cached for a second.
+
+        Must never open a writing connection: the pipeline holds the write lock
+        almost continuously, so anything that commits here starves it.
+        """
+        if not plate or plate == "(unreadable)":
+            return None
+        now = time.time()
+        if plate == self._reg_plate and now - self._reg_at < 1.0:
+            return self._reg_val
+        val = None
+        try:
+            import sqlite3
+            path = Path(_cfg().get("db_path", "plates.db"))
+            if not path.is_absolute():
+                path = PROJECT_ROOT / path
+            con = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True, timeout=3)
+            try:
+                val = con.execute(
+                    "SELECT 1 FROM registered_plates "
+                    "WHERE plate_text = ? AND status = 'active' LIMIT 1",
+                    (plate,)).fetchone() is not None
+            finally:
+                con.close()
+        except Exception:
+            val = None
+        self._reg_plate, self._reg_val, self._reg_at = plate, val, now
+        return val
+
     def jpeg(self) -> bytes | None:
         with self._lock:
             return self.frame_jpeg
@@ -149,9 +180,20 @@ class LiveWorker:
         if s is None:
             return {"ready": False, "error": self.error}
         st = s.get_session_stats()
+        # Does the last read already have a whitelist row? This drives the
+        # "Authorize" button on the live page, so the demo never has to leave it.
+        #
+        # Deliberately NOT PlateDatabase(): its __init__ runs CREATE TABLE IF NOT
+        # EXISTS + commit(), i.e. a WRITE transaction. Called once per second from
+        # the status poll it fought the pipeline's ~20 audit writes/sec and every
+        # single write failed with "database is locked". Read-only connection,
+        # one SELECT, and the answer is cached for a second.
+        plate = p.get("plate_text") or ""
+        registered = self._is_registered(plate)
         return {
             "ready": True, "error": self.error,
             "plate": p.get("plate_text", "—"),
+            "registered": registered,
             "action": p.get("action", "—"),
             "crnn": p.get("crnn_confidence"),
             "latency_ms": p.get("total_ms"),
@@ -282,138 +324,397 @@ def _record_failure(ip: str) -> None:
 LOGIN_PAGE = Template("""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ALPR Admin — sign in</title>
+<title>Sign in — Cambodian ALPR</title>
 <style>
-  :root { color-scheme: light dark; }
-  * { box-sizing: border-box; }
-  body { font-family: system-ui, "Segoe UI", sans-serif; background: #0f1115;
-         color: #e7e9ee; display: grid; place-items: center; min-height: 100vh;
-         margin: 0; padding: 1rem; }
-  .card { width: 100%; max-width: 340px; background: #161a22; padding: 1.5rem;
-          border: 1px solid #232838; border-radius: 12px; }
-  h1 { font-size: 1.15rem; margin: 0 0 .3rem; }
-  .sub { color: #9aa3b2; font-size: .85rem; margin-bottom: 1.1rem; }
-  input { width: 100%; padding: .6rem .7rem; border-radius: 8px;
-          border: 1px solid #2a3040; background: #0f1115; color: #e7e9ee;
-          font-size: 1rem; }
-  button { width: 100%; margin-top: .8rem; padding: .6rem; border: 0;
-           border-radius: 8px; background: #2b6cb0; color: #fff;
-           font-weight: 700; font-size: 1rem; cursor: pointer; }
-  .err { background: #3a1b1b; color: #ff6b6b; padding: .5rem .7rem;
-         border-radius: 8px; font-size: .85rem; margin-bottom: .8rem; }
+  :root{
+    --ink:#0b1f3a; --navy:#1f3b73; --accent:#2e7dd1; --accent-dark:#255f9e;
+    --mute:#64748b; --line:#e2e8f0; --bg:#f5f7fa; --card:#ffffff;
+    --ok:#16a34a; --ok-bg:#eafaf0; --bad:#dc2626; --bad-bg:#fdecec;
+    --warn:#b45309; --warn-bg:#fdf6e7;
+    --shadow:0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.08);
+    --radius:10px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font-family:system-ui,-apple-system,"Segoe UI","Noto Sans Khmer",sans-serif;
+       font-size:15px;line-height:1.5}
+  a{color:var(--accent);text-decoration:none}
+  .shell{max-width:1180px;margin-inline:auto;padding:0 1.25rem 3rem}
+
+  /* ---- top bar ---- */
+  .topbar{background:var(--card);border-bottom:1px solid var(--line);
+          box-shadow:var(--shadow);position:sticky;top:0;z-index:20}
+  .topbar .inner{max-width:1180px;margin-inline:auto;padding:.7rem 1.25rem;
+          display:flex;align-items:center;gap:1.25rem;flex-wrap:wrap}
+  .brand{font-weight:800;font-size:1.02rem;color:var(--navy);letter-spacing:-.01em;
+         display:flex;align-items:center;gap:.5rem}
+  .brand .dot{width:9px;height:9px;border-radius:50%;background:var(--accent)}
+  nav{display:flex;gap:.25rem;margin-left:auto}
+  nav a{padding:.45rem .85rem;border-radius:8px;font-weight:600;font-size:.88rem;
+        color:var(--mute)}
+  nav a:hover{background:var(--bg);color:var(--ink)}
+  nav a.on{background:var(--navy);color:#fff}
+  nav a.quiet{color:var(--mute)}
+
+  /* ---- page head ---- */
+  .head{padding:1.6rem 0 1.1rem}
+  .head h1{margin:0;font-size:1.55rem;font-weight:800;letter-spacing:-.02em}
+  .head .sub{color:var(--mute);font-size:.92rem;margin-top:.3rem;max-width:70ch}
+
+  /* ---- cards ---- */
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+        box-shadow:var(--shadow);margin-bottom:1.1rem;overflow:hidden}
+  .card > .ch{padding:.85rem 1.1rem;border-bottom:1px solid var(--line);
+       display:flex;align-items:center;justify-content:space-between;gap:1rem;
+       background:#fcfdfe}
+  .card > .ch h2{margin:0;font-size:.98rem;font-weight:700}
+  .card > .ch .n{color:var(--mute);font-weight:600;font-size:.85rem}
+  .card > .cb{padding:1.1rem}
+  .card > .cb.flush{padding:0;overflow-x:auto}
+  .pager{padding:.3rem .65rem;border:1px solid var(--line);border-radius:7px;
+         background:#fff;font-weight:700;font-size:.82rem;color:var(--ink)}
+  .pager:hover{border-color:var(--accent);color:var(--accent)}
+
+  /* ---- stats ---- */
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:.7rem}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+        padding:.75rem .9rem;box-shadow:var(--shadow)}
+  .stat b{display:block;font-size:1.5rem;font-weight:800;letter-spacing:-.02em;
+          line-height:1.15}
+  .stat span{color:var(--mute);font-size:.76rem;font-weight:600;
+             text-transform:uppercase;letter-spacing:.05em}
+
+  /* ---- tables ---- */
+  table{width:100%;border-collapse:collapse}
+  th{text-align:left;padding:.6rem 1.1rem;font-size:.74rem;font-weight:700;
+     color:var(--mute);text-transform:uppercase;letter-spacing:.05em;
+     background:#fcfdfe;border-bottom:1px solid var(--line);white-space:nowrap}
+  td{padding:.65rem 1.1rem;border-bottom:1px solid var(--line);font-size:.92rem;
+     vertical-align:middle}
+  tbody tr:last-child td{border-bottom:0}
+  tbody tr:hover{background:#fafcfe}
+  .plate{font-weight:700;letter-spacing:-.01em}
+  .mono{font-variant-numeric:tabular-nums;color:var(--mute);font-size:.86rem;
+        white-space:nowrap}
+  .empty{color:var(--mute);font-style:italic}
+
+  /* ---- pills ---- */
+  .pill{display:inline-block;padding:.12rem .55rem;border-radius:999px;
+        font-size:.76rem;font-weight:700;white-space:nowrap}
+  .p-ok{background:var(--ok-bg);color:var(--ok)}
+  .p-bad{background:var(--bad-bg);color:var(--bad)}
+  .p-warn{background:var(--warn-bg);color:var(--warn)}
+  .p-mute{background:#eef2f7;color:var(--mute)}
+
+  /* ---- forms ---- */
+  label{display:block;font-size:.76rem;font-weight:700;color:var(--mute);
+        text-transform:uppercase;letter-spacing:.04em;margin-bottom:.3rem}
+  input,select{width:100%;padding:.52rem .7rem;border:1px solid var(--line);
+       border-radius:8px;background:#fff;color:var(--ink);font-size:.93rem;
+       font-family:inherit}
+  input:focus,select:focus{outline:0;border-color:var(--accent);
+       box-shadow:0 0 0 3px rgba(46,125,209,.14)}
+  input::placeholder{color:#b4bfcd}
+  .row{display:flex;gap:.8rem;flex-wrap:wrap;align-items:flex-end}
+  .row > div{flex:1 1 170px;min-width:0}
+  .row > div.sm{flex:0 0 auto}
+  form.inline{display:inline}
+
+  /* ---- buttons ---- */
+  button{cursor:pointer;border:1px solid transparent;border-radius:8px;
+         padding:.52rem .9rem;font-size:.86rem;font-weight:700;font-family:inherit;
+         white-space:nowrap;transition:filter .12s}
+  button:hover{filter:brightness(.94)}
+  .b-primary{background:var(--accent);color:#fff}
+  .b-ghost{background:#fff;color:var(--ink);border-color:var(--line)}
+  .b-ok{background:var(--ok);color:#fff}
+  .b-warn{background:#fff;color:var(--warn);border-color:#f0dfb8}
+  .b-danger{background:#fff;color:var(--bad);border-color:#f3cfcf}
+  .b-sm{padding:.34rem .62rem;font-size:.79rem}
+
+  /* ---- messages ---- */
+  .msg{padding:.7rem 1rem;border-radius:var(--radius);font-size:.9rem;
+       font-weight:600;margin-bottom:1.1rem;border:1px solid}
+  .msg.ok{background:var(--ok-bg);color:var(--ok);border-color:#bfe8cd}
+  .msg.err{background:var(--bad-bg);color:var(--bad);border-color:#f3cfcf}
+  .foot{color:var(--mute);font-size:.82rem;padding:.75rem 1.1rem;
+        border-top:1px solid var(--line);background:#fcfdfe}
+</style>
+<style>
+  body{display:grid;place-items:center;min-height:100vh;padding:1.25rem}
+  .login{width:100%;max-width:370px}
+  .login .cb{padding:1.6rem}
+  .login h1{margin:0 0 .25rem;font-size:1.25rem;font-weight:800}
+  .login .sub{color:var(--mute);font-size:.88rem;margin-bottom:1.3rem}
+  .login button{width:100%;margin-top:.9rem;padding:.65rem}
+  .note{text-align:center;color:var(--mute);font-size:.78rem;margin-top:1rem}
 </style></head><body>
-  <div class="card">
-    <h1>ALPR Admin</h1>
-    <div class="sub">Whitelist &amp; audit control</div>
-    {% if error %}<div class="err">{{ error }}</div>{% endif %}
-    <form method="post" action="/login">
-      <input type="password" name="password" placeholder="Admin password"
-             autofocus autocomplete="current-password" required>
-      <button type="submit">Sign in</button>
-    </form>
+  <div class="login">
+    <div class="card"><div class="cb">
+      <h1>Cambodian ALPR</h1>
+      <div class="sub">Whitelist &amp; audit control</div>
+      {% if error %}<div class="msg err">{{ error }}</div>{% endif %}
+      <form method="post" action="/login">
+        <label for="pw">Admin password</label>
+        <input id="pw" type="password" name="password" autofocus
+               autocomplete="current-password" required>
+        <button class="b-primary" type="submit">Sign in</button>
+      </form>
+    </div></div>
+    <div class="note">This panel controls which plates open the gate.</div>
   </div>
 </body></html>""")
 
 LIVE_PAGE = Template("""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ALPR — Live gate</title>
+<title>Live gate — Cambodian ALPR</title>
 <style>
-  :root { color-scheme: dark; }
-  * { box-sizing: border-box; }
-  body { font-family: system-ui, "Segoe UI", "Noto Sans Khmer", sans-serif;
-         margin: 0; padding: 1rem; max-width: 1200px; margin-inline: auto;
-         background: #0f1115; color: #e7e9ee; }
-  h1 { font-size: 1.4rem; margin: 0 0 .2rem; }
-  .sub { color: #9aa3b2; font-size: .9rem; }
-  nav { display: flex; gap: .5rem; margin: .8rem 0 1rem; }
-  nav a { padding: .45rem .9rem; border-radius: 8px; text-decoration: none;
-          font-weight: 600; font-size: .9rem; background: #161a22;
-          color: #9aa3b2; border: 1px solid #232838; }
-  nav a.on { background: #2f6d7d; color: #fff; border-color: #2f6d7d; }
-  .wrap { display: grid; grid-template-columns: 1fr 340px; gap: 1rem; }
-  @media (max-width: 900px) { .wrap { grid-template-columns: 1fr; } }
-  .card { background: #161a22; border: 1px solid #232838; border-radius: 10px;
-          padding: 1rem; }
-  img#cam { width: 100%; border-radius: 8px; display: block; background: #000; }
-  .big { font-size: 1.5rem; font-weight: 700; word-break: break-all; }
-  .pill { display: inline-block; padding: .15rem .6rem; border-radius: 999px;
-          font-size: .8rem; font-weight: 700; }
-  .ok { background: #12351f; color: #46d17f; }
-  .bad { background: #3a1b1b; color: #ff6b6b; }
-  .warn { background: #3a3119; color: #e3b341; }
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; margin-top: .8rem; }
-  .stat { background: #0f1115; border: 1px solid #232838; border-radius: 8px;
-          padding: .5rem .7rem; }
-  .stat b { display: block; font-size: 1.25rem; }
-  .stat span { color: #9aa3b2; font-size: .75rem; }
-  button { cursor: pointer; border: 0; border-radius: 8px; padding: .7rem 1rem;
-           font-size: .95rem; font-weight: 700; color: #fff; width: 100%; }
-  .b-open { background: #2f7d46; } .b-stop { background: #a33; }
-  form { margin-top: .6rem; }
-  .err { background: #3a1b1b; color: #ff9a9a; padding: .6rem .8rem;
-         border-radius: 8px; margin-bottom: 1rem; font-size: .9rem; }
+  :root{
+    --ink:#0b1f3a; --navy:#1f3b73; --accent:#2e7dd1; --accent-dark:#255f9e;
+    --mute:#64748b; --line:#e2e8f0; --bg:#f5f7fa; --card:#ffffff;
+    --ok:#16a34a; --ok-bg:#eafaf0; --bad:#dc2626; --bad-bg:#fdecec;
+    --warn:#b45309; --warn-bg:#fdf6e7;
+    --shadow:0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.08);
+    --radius:10px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font-family:system-ui,-apple-system,"Segoe UI","Noto Sans Khmer",sans-serif;
+       font-size:15px;line-height:1.5}
+  a{color:var(--accent);text-decoration:none}
+  .shell{max-width:1180px;margin-inline:auto;padding:0 1.25rem 3rem}
+
+  /* ---- top bar ---- */
+  .topbar{background:var(--card);border-bottom:1px solid var(--line);
+          box-shadow:var(--shadow);position:sticky;top:0;z-index:20}
+  .topbar .inner{max-width:1180px;margin-inline:auto;padding:.7rem 1.25rem;
+          display:flex;align-items:center;gap:1.25rem;flex-wrap:wrap}
+  .brand{font-weight:800;font-size:1.02rem;color:var(--navy);letter-spacing:-.01em;
+         display:flex;align-items:center;gap:.5rem}
+  .brand .dot{width:9px;height:9px;border-radius:50%;background:var(--accent)}
+  nav{display:flex;gap:.25rem;margin-left:auto}
+  nav a{padding:.45rem .85rem;border-radius:8px;font-weight:600;font-size:.88rem;
+        color:var(--mute)}
+  nav a:hover{background:var(--bg);color:var(--ink)}
+  nav a.on{background:var(--navy);color:#fff}
+  nav a.quiet{color:var(--mute)}
+
+  /* ---- page head ---- */
+  .head{padding:1.6rem 0 1.1rem}
+  .head h1{margin:0;font-size:1.55rem;font-weight:800;letter-spacing:-.02em}
+  .head .sub{color:var(--mute);font-size:.92rem;margin-top:.3rem;max-width:70ch}
+
+  /* ---- cards ---- */
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+        box-shadow:var(--shadow);margin-bottom:1.1rem;overflow:hidden}
+  .card > .ch{padding:.85rem 1.1rem;border-bottom:1px solid var(--line);
+       display:flex;align-items:center;justify-content:space-between;gap:1rem;
+       background:#fcfdfe}
+  .card > .ch h2{margin:0;font-size:.98rem;font-weight:700}
+  .card > .ch .n{color:var(--mute);font-weight:600;font-size:.85rem}
+  .card > .cb{padding:1.1rem}
+  .card > .cb.flush{padding:0}
+
+  /* ---- stats ---- */
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:.7rem}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+        padding:.75rem .9rem;box-shadow:var(--shadow)}
+  .stat b{display:block;font-size:1.5rem;font-weight:800;letter-spacing:-.02em;
+          line-height:1.15}
+  .stat span{color:var(--mute);font-size:.76rem;font-weight:600;
+             text-transform:uppercase;letter-spacing:.05em}
+
+  /* ---- tables ---- */
+  table{width:100%;border-collapse:collapse}
+  th{text-align:left;padding:.6rem 1.1rem;font-size:.74rem;font-weight:700;
+     color:var(--mute);text-transform:uppercase;letter-spacing:.05em;
+     background:#fcfdfe;border-bottom:1px solid var(--line);white-space:nowrap}
+  td{padding:.65rem 1.1rem;border-bottom:1px solid var(--line);font-size:.92rem;
+     vertical-align:middle}
+  tbody tr:last-child td{border-bottom:0}
+  tbody tr:hover{background:#fafcfe}
+  .plate{font-weight:700;letter-spacing:-.01em}
+  .mono{font-variant-numeric:tabular-nums;color:var(--mute);font-size:.86rem;
+        white-space:nowrap}
+  .empty{color:var(--mute);font-style:italic}
+
+  /* ---- pills ---- */
+  .pill{display:inline-block;padding:.12rem .55rem;border-radius:999px;
+        font-size:.76rem;font-weight:700;white-space:nowrap}
+  .p-ok{background:var(--ok-bg);color:var(--ok)}
+  .p-bad{background:var(--bad-bg);color:var(--bad)}
+  .p-warn{background:var(--warn-bg);color:var(--warn)}
+  .p-mute{background:#eef2f7;color:var(--mute)}
+
+  /* ---- forms ---- */
+  label{display:block;font-size:.76rem;font-weight:700;color:var(--mute);
+        text-transform:uppercase;letter-spacing:.04em;margin-bottom:.3rem}
+  input,select{width:100%;padding:.52rem .7rem;border:1px solid var(--line);
+       border-radius:8px;background:#fff;color:var(--ink);font-size:.93rem;
+       font-family:inherit}
+  input:focus,select:focus{outline:0;border-color:var(--accent);
+       box-shadow:0 0 0 3px rgba(46,125,209,.14)}
+  input::placeholder{color:#b4bfcd}
+  .row{display:flex;gap:.8rem;flex-wrap:wrap;align-items:flex-end}
+  .row > div{flex:1 1 170px;min-width:0}
+  .row > div.sm{flex:0 0 auto}
+  form.inline{display:inline}
+
+  /* ---- buttons ---- */
+  button{cursor:pointer;border:1px solid transparent;border-radius:8px;
+         padding:.52rem .9rem;font-size:.86rem;font-weight:700;font-family:inherit;
+         white-space:nowrap;transition:filter .12s}
+  button:hover{filter:brightness(.94)}
+  .b-primary{background:var(--accent);color:#fff}
+  .b-ghost{background:#fff;color:var(--ink);border-color:var(--line)}
+  .b-ok{background:var(--ok);color:#fff}
+  .b-warn{background:#fff;color:var(--warn);border-color:#f0dfb8}
+  .b-danger{background:#fff;color:var(--bad);border-color:#f3cfcf}
+  .b-sm{padding:.34rem .62rem;font-size:.79rem}
+
+  /* ---- messages ---- */
+  .msg{padding:.7rem 1rem;border-radius:var(--radius);font-size:.9rem;
+       font-weight:600;margin-bottom:1.1rem;border:1px solid}
+  .msg.ok{background:var(--ok-bg);color:var(--ok);border-color:#bfe8cd}
+  .msg.err{background:var(--bad-bg);color:var(--bad);border-color:#f3cfcf}
+  .foot{color:var(--mute);font-size:.82rem;padding:.75rem 1.1rem;
+        border-top:1px solid var(--line);background:#fcfdfe}
+</style>
+<style>
+  .wrap{display:grid;grid-template-columns:1fr 330px;gap:1.1rem;align-items:start}
+  @media(max-width:900px){.wrap{grid-template-columns:1fr}}
+  #cam{width:100%;display:block;background:#0b1f3a;border-radius:8px}
+  #camload{aspect-ratio:1/1;display:grid;place-content:center;gap:.8rem;
+           justify-items:center;background:#f8fafc;border-radius:8px;
+           color:var(--mute);font-size:.9rem;text-align:center;padding:1rem}
+  .spinner{width:26px;height:26px;border:3px solid var(--line);
+           border-top-color:var(--accent);border-radius:50%;
+           animation:spin .9s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .last{font-size:1.45rem;font-weight:800;letter-spacing:-.02em;word-break:break-all;
+        line-height:1.25;margin:.1rem 0 .5rem}
+  .ctl{display:grid;gap:.55rem}
+  .ctl button{width:100%;padding:.75rem;font-size:.92rem}
+  .kv{display:flex;justify-content:space-between;font-size:.86rem;
+      padding:.35rem 0;border-bottom:1px solid var(--line)}
+  .kv:last-child{border-bottom:0}
+  .kv span{color:var(--mute)}
+  .kv b{font-variant-numeric:tabular-nums}
 </style></head><body>
-<h1>Live gate</h1>
-<div class="sub">{{ source }}</div>
-<nav>
-  <a href="/live" class="on">Live gate</a>
-  <a href="/">Whitelist &amp; audit log</a>
-  <a href="/logout">Sign out</a>
-</nav>
-{% if error %}<div class="err">Pipeline error: {{ error }}</div>{% endif %}
-<div class="wrap">
-  <div class="card">
-    <img id="cam" src="/stream" alt="live camera">
+<div class="topbar"><div class="inner">
+  <div class="brand"><span class="dot"></span> Cambodian ALPR</div>
+  <nav>
+    <a href="/live" class="on">Live gate</a>
+    <a href="/" class="">Whitelist &amp; audit</a>
+    <a href="/logout" class="quiet">Sign out</a>
+  </nav>
+</div></div>
+<div class="shell">
+  <div class="head">
+    <h1>Live gate</h1>
+    <div class="sub">{{ source }} — the pipeline decides, the gate stays closed unless a
+      confident read matches an authorized plate.</div>
   </div>
-  <div>
-    <div class="card">
-      <div class="sub">last read</div>
-      <div class="big" id="plate">—</div>
-      <div style="margin-top:.5rem">
-        <span class="pill" id="action">—</span>
-        <span class="sub" id="conf"></span>
+  {% if error %}<div class="msg err">Pipeline error: {{ error }}</div>{% endif %}
+  <div class="wrap">
+    <div class="card"><div class="cb flush" style="position:relative">
+      <div id="camwrap">
+        <div id="camload">
+          <div class="spinner"></div>
+          <div>Loading the pipeline — four models, about ten seconds…</div>
+        </div>
+        <img id="cam" src="/stream" alt="live camera" style="display:none"
+             onload="camUp()" onerror="camDown()">
       </div>
-      <div class="grid">
-        <div class="stat"><b id="allowed">0</b><span>allowed</span></div>
-        <div class="stat"><b id="denied">0</b><span>denied</span></div>
-        <div class="stat"><b id="review">0</b><span>review</span></div>
-        <div class="stat"><b id="latency">—</b><span>ms / frame</span></div>
+    </div></div>
+    <div>
+      <div class="card">
+        <div class="ch"><h2>Last read</h2><span class="pill p-mute" id="gate">—</span></div>
+        <div class="cb">
+          <div class="last" id="plate">—</div>
+          <span class="pill p-mute" id="action">waiting</span>
+          <span class="pill p-ok" id="known" style="display:none">authorized</span>
+          <form method="post" action="/live_authorize" id="authform"
+                style="display:none;margin-top:.8rem"
+                onsubmit="return confirm('Authorize this plate to open the gate?\n\n' + document.getElementById('plate').textContent)">
+            <input type="hidden" name="plate_text" id="authplate">
+            <button class="b-primary" style="width:100%" type="submit">
+              Authorize this plate</button>
+          </form>
+          <div style="margin-top:.9rem">
+            <div class="kv"><span>Reader confidence</span><b id="conf">—</b></div>
+            <div class="kv"><span>Latency</span><b id="latency">—</b></div>
+            <div class="kv"><span>Frames processed</span><b id="processed">—</b></div>
+          </div>
+        </div>
       </div>
-    </div>
-    <div class="card" style="margin-top:1rem">
-      <div class="sub">operator controls</div>
-      <form method="post" action="/live_open">
-        <button class="b-open">MANUAL OPEN</button>
-      </form>
-      <form method="post" action="/live_estop">
-        <button class="b-stop" id="estop">EMERGENCY STOP</button>
-      </form>
+      <div class="card">
+        <div class="ch"><h2>Session</h2></div>
+        <div class="cb">
+          <div class="stats" style="grid-template-columns:1fr 1fr 1fr">
+            <div class="stat"><b id="allowed" style="color:var(--ok)">0</b><span>Allowed</span></div>
+            <div class="stat"><b id="denied" style="color:var(--bad)">0</b><span>Denied</span></div>
+            <div class="stat"><b id="review" style="color:var(--warn)">0</b><span>Review</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="ch"><h2>Operator controls</h2></div>
+        <div class="cb"><div class="ctl">
+          <form method="post" action="/live_open">
+            <button class="b-ok" type="submit">Manual open</button></form>
+          <form method="post" action="/live_estop">
+            <button class="b-danger" id="estop" type="submit">Emergency stop</button></form>
+        </div></div>
+        <div class="foot">Both actions are written to the audit log.</div>
+      </div>
     </div>
   </div>
 </div>
 <script>
-async function tick() {
-  try {
-    const r = await fetch('/live_status.json', {cache: 'no-store'});
-    const s = await r.json();
-    if (!s.ready) return;
-    document.getElementById('plate').textContent   = s.plate || '—';
-    document.getElementById('allowed').textContent = s.allowed;
-    document.getElementById('denied').textContent  = s.denied;
-    document.getElementById('review').textContent  = s.review;
-    document.getElementById('latency').textContent = s.latency_ms ?? '—';
-    document.getElementById('conf').textContent    =
-        s.crnn != null ? ('confidence ' + s.crnn) : '';
-    const a = document.getElementById('action');
-    a.textContent = s.action || '—';
-    a.className = 'pill ' + (s.action === 'ENTRY_ALLOWED' ? 'ok'
-                           : s.action === 'ENTRY_DENIED' ? 'bad' : 'warn');
-    document.getElementById('estop').textContent =
-        s.estop ? 'CLEAR EMERGENCY STOP' : 'EMERGENCY STOP';
-  } catch (e) {}
+async function tick(){
+  try{
+    const s = await (await fetch('/live_status.json',{cache:'no-store'})).json();
+    if(!s.ready) return;
+    const $ = i => document.getElementById(i);
+    $('plate').textContent     = s.plate || '—';
+    $('allowed').textContent   = s.allowed;
+    $('denied').textContent    = s.denied;
+    $('review').textContent    = s.review;
+    $('processed').textContent = s.processed;
+    $('latency').textContent   = s.latency_ms != null ? s.latency_ms + ' ms' : '—';
+    $('conf').textContent      = s.crnn != null ? s.crnn : '—';
+    const a = $('action');
+    a.textContent = (s.action || '—').replace(/_/g,' ');
+    a.className = 'pill ' + (s.action==='ENTRY_ALLOWED' ? 'p-ok'
+                          : s.action==='ENTRY_DENIED'  ? 'p-bad'
+                          : s.action==='—'             ? 'p-mute' : 'p-warn');
+    const g = $('gate');
+    g.textContent = s.estop ? 'E-STOP' : 'gate ' + s.gate;
+    g.className = 'pill ' + (s.estop ? 'p-bad' : 'p-mute');
+    $('estop').textContent = s.estop ? 'Clear emergency stop' : 'Emergency stop';
+    // offer one-click enrolment only for a plate that is readable and unknown
+    const plate = s.plate, known = s.registered === true;
+    const show  = plate && plate !== '—' && plate !== '(unreadable)' && !known;
+    $('authform').style.display = show ? 'block' : 'none';
+    $('known').style.display    = known ? 'inline-block' : 'none';
+    if (show) $('authplate').value = plate;
+  }catch(e){}
 }
-setInterval(tick, 1000); tick();
+function camUp(){
+  document.getElementById('camload').style.display='none';
+  document.getElementById('cam').style.display='block';
+}
+function camDown(){
+  document.getElementById('cam').style.display='none';
+  const l=document.getElementById('camload');
+  l.style.display='grid';
+  l.innerHTML='<div style="font-size:1.6rem">⚠</div>'
+            + '<div>Video stream lost. The pipeline may have stopped — '
+            + 'check the terminal, then reload.</div>';
+}
+setInterval(tick,1000); tick();
 </script>
 </body></html>""")
 
@@ -421,166 +722,279 @@ setInterval(tick, 1000); tick();
 PAGE = Template("""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ALPR Admin — Whitelist</title>
+<title>Whitelist &amp; audit — Cambodian ALPR</title>
 <style>
-  :root { color-scheme: light dark; }
-  * { box-sizing: border-box; }
-  body { font-family: system-ui, "Segoe UI", "Noto Sans Khmer", sans-serif;
-         margin: 0; padding: 1rem; max-width: 900px; margin-inline: auto;
-         background: #0f1115; color: #e7e9ee; }
-  h1 { font-size: 1.4rem; } h2 { font-size: 1.1rem; margin-top: 1.6rem; }
-  .sub { color: #9aa3b2; font-size: .9rem; }
-  table { width: 100%; border-collapse: collapse; margin-top: .5rem; }
-  th, td { text-align: left; padding: .5rem .6rem; border-bottom: 1px solid #232838;
-           font-size: .95rem; }
-  th { color: #9aa3b2; font-weight: 600; }
-  .plate { font-weight: 700; }
-  .pill { padding: .1rem .5rem; border-radius: 999px; font-size: .78rem; font-weight: 700; }
-  .ok { background: #12351f; color: #46d17f; }
-  .bad { background: #3a1b1b; color: #ff6b6b; }
-  form.inline { display: inline; }
-  button { cursor: pointer; border: 0; border-radius: 6px; padding: .35rem .6rem;
-           font-size: .82rem; font-weight: 600; color: #fff; }
-  .b-add { background: #2f7d46; } .b-susp { background: #b5842a; }
-  .b-act { background: #2f6d7d; } .b-del { background: #a33; }
-  .card { background: #161a22; border: 1px solid #232838; border-radius: 10px;
-          padding: 1rem; margin-top: 1rem; }
-  input, select { padding: .5rem; border-radius: 6px; border: 1px solid #333a4d;
-                  background: #0f1115; color: #e7e9ee; font-size: .95rem; }
-  .row { display: flex; gap: .5rem; flex-wrap: wrap; align-items: end; }
-  .row > div { display: flex; flex-direction: column; gap: .2rem; }
-  label { font-size: .78rem; color: #9aa3b2; }
-  .msg { padding: .6rem .8rem; border-radius: 8px; margin-top: .8rem; }
-  .msg.ok { background: #12351f; color: #7be0a3; }
-  .msg.err { background: #3a1b1b; color: #ff9b9b; }
-  .act { color: #9aa3b2; } .a-allow { color: #46d17f; } .a-deny { color: #ff6b6b; }
-  .a-review { color: #e0b23a; }
-</style></head><body>
-  <h1>🚗 ALPR Whitelist Admin</h1>
-  <div class="sub">{{ n_auth }} authorized · {{ n_blocked }} blocked · {{ n_total }} total.
-    A live plate opens the gate only if its composed text <b>exactly</b> matches an
-    authorized row and confidence ≥ 0.70.</div>
+  :root{
+    --ink:#0b1f3a; --navy:#1f3b73; --accent:#2e7dd1; --accent-dark:#255f9e;
+    --mute:#64748b; --line:#e2e8f0; --bg:#f5f7fa; --card:#ffffff;
+    --ok:#16a34a; --ok-bg:#eafaf0; --bad:#dc2626; --bad-bg:#fdecec;
+    --warn:#b45309; --warn-bg:#fdf6e7;
+    --shadow:0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.08);
+    --radius:10px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font-family:system-ui,-apple-system,"Segoe UI","Noto Sans Khmer",sans-serif;
+       font-size:15px;line-height:1.5}
+  a{color:var(--accent);text-decoration:none}
+  .shell{max-width:1180px;margin-inline:auto;padding:0 1.25rem 3rem}
 
-  <nav style="display:flex;gap:.5rem;margin:.9rem 0 .2rem">
-    {% if live %}<a href="/live" style="padding:.45rem .9rem;border-radius:8px;
-       text-decoration:none;font-weight:600;font-size:.9rem;background:#161a22;
-       color:#9aa3b2;border:1px solid #232838">Live gate</a>{% endif %}
-    <a href="/" style="padding:.45rem .9rem;border-radius:8px;text-decoration:none;
-       font-weight:600;font-size:.9rem;background:#2f6d7d;color:#fff;
-       border:1px solid #2f6d7d">Whitelist &amp; audit log</a>
-    <a href="/logout" style="padding:.45rem .9rem;border-radius:8px;
-       text-decoration:none;font-weight:600;font-size:.9rem;background:#161a22;
-       color:#9aa3b2;border:1px solid #232838">Sign out</a>
+  /* ---- top bar ---- */
+  .topbar{background:var(--card);border-bottom:1px solid var(--line);
+          box-shadow:var(--shadow);position:sticky;top:0;z-index:20}
+  .topbar .inner{max-width:1180px;margin-inline:auto;padding:.7rem 1.25rem;
+          display:flex;align-items:center;gap:1.25rem;flex-wrap:wrap}
+  .brand{font-weight:800;font-size:1.02rem;color:var(--navy);letter-spacing:-.01em;
+         display:flex;align-items:center;gap:.5rem}
+  .brand .dot{width:9px;height:9px;border-radius:50%;background:var(--accent)}
+  nav{display:flex;gap:.25rem;margin-left:auto}
+  nav a{padding:.45rem .85rem;border-radius:8px;font-weight:600;font-size:.88rem;
+        color:var(--mute)}
+  nav a:hover{background:var(--bg);color:var(--ink)}
+  nav a.on{background:var(--navy);color:#fff}
+  nav a.quiet{color:var(--mute)}
+
+  /* ---- page head ---- */
+  .head{padding:1.6rem 0 1.1rem}
+  .head h1{margin:0;font-size:1.55rem;font-weight:800;letter-spacing:-.02em}
+  .head .sub{color:var(--mute);font-size:.92rem;margin-top:.3rem;max-width:70ch}
+
+  /* ---- cards ---- */
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+        box-shadow:var(--shadow);margin-bottom:1.1rem;overflow:hidden}
+  .card > .ch{padding:.85rem 1.1rem;border-bottom:1px solid var(--line);
+       display:flex;align-items:center;justify-content:space-between;gap:1rem;
+       background:#fcfdfe}
+  .card > .ch h2{margin:0;font-size:.98rem;font-weight:700}
+  .card > .ch .n{color:var(--mute);font-weight:600;font-size:.85rem}
+  .card > .cb{padding:1.1rem}
+  .card > .cb.flush{padding:0}
+
+  /* ---- stats ---- */
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:.7rem}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+        padding:.75rem .9rem;box-shadow:var(--shadow)}
+  .stat b{display:block;font-size:1.5rem;font-weight:800;letter-spacing:-.02em;
+          line-height:1.15}
+  .stat span{color:var(--mute);font-size:.76rem;font-weight:600;
+             text-transform:uppercase;letter-spacing:.05em}
+
+  /* ---- tables ---- */
+  table{width:100%;border-collapse:collapse}
+  th{text-align:left;padding:.6rem 1.1rem;font-size:.74rem;font-weight:700;
+     color:var(--mute);text-transform:uppercase;letter-spacing:.05em;
+     background:#fcfdfe;border-bottom:1px solid var(--line);white-space:nowrap}
+  td{padding:.65rem 1.1rem;border-bottom:1px solid var(--line);font-size:.92rem;
+     vertical-align:middle}
+  tbody tr:last-child td{border-bottom:0}
+  tbody tr:hover{background:#fafcfe}
+  .plate{font-weight:700;letter-spacing:-.01em}
+  .mono{font-variant-numeric:tabular-nums;color:var(--mute);font-size:.86rem;
+        white-space:nowrap}
+  .empty{color:var(--mute);font-style:italic}
+
+  /* ---- pills ---- */
+  .pill{display:inline-block;padding:.12rem .55rem;border-radius:999px;
+        font-size:.76rem;font-weight:700;white-space:nowrap}
+  .p-ok{background:var(--ok-bg);color:var(--ok)}
+  .p-bad{background:var(--bad-bg);color:var(--bad)}
+  .p-warn{background:var(--warn-bg);color:var(--warn)}
+  .p-mute{background:#eef2f7;color:var(--mute)}
+
+  /* ---- forms ---- */
+  label{display:block;font-size:.76rem;font-weight:700;color:var(--mute);
+        text-transform:uppercase;letter-spacing:.04em;margin-bottom:.3rem}
+  input,select{width:100%;padding:.52rem .7rem;border:1px solid var(--line);
+       border-radius:8px;background:#fff;color:var(--ink);font-size:.93rem;
+       font-family:inherit}
+  input:focus,select:focus{outline:0;border-color:var(--accent);
+       box-shadow:0 0 0 3px rgba(46,125,209,.14)}
+  input::placeholder{color:#b4bfcd}
+  .row{display:flex;gap:.8rem;flex-wrap:wrap;align-items:flex-end}
+  .row > div{flex:1 1 170px;min-width:0}
+  .row > div.sm{flex:0 0 auto}
+  form.inline{display:inline}
+
+  /* ---- buttons ---- */
+  button{cursor:pointer;border:1px solid transparent;border-radius:8px;
+         padding:.52rem .9rem;font-size:.86rem;font-weight:700;font-family:inherit;
+         white-space:nowrap;transition:filter .12s}
+  button:hover{filter:brightness(.94)}
+  .b-primary{background:var(--accent);color:#fff}
+  .b-ghost{background:#fff;color:var(--ink);border-color:var(--line)}
+  .b-ok{background:var(--ok);color:#fff}
+  .b-warn{background:#fff;color:var(--warn);border-color:#f0dfb8}
+  .b-danger{background:#fff;color:var(--bad);border-color:#f3cfcf}
+  .b-sm{padding:.34rem .62rem;font-size:.79rem}
+
+  /* ---- messages ---- */
+  .msg{padding:.7rem 1rem;border-radius:var(--radius);font-size:.9rem;
+       font-weight:600;margin-bottom:1.1rem;border:1px solid}
+  .msg.ok{background:var(--ok-bg);color:var(--ok);border-color:#bfe8cd}
+  .msg.err{background:var(--bad-bg);color:var(--bad);border-color:#f3cfcf}
+  .foot{color:var(--mute);font-size:.82rem;padding:.75rem 1.1rem;
+        border-top:1px solid var(--line);background:#fcfdfe}
+</style>
+</head><body>
+<div class="topbar"><div class="inner">
+  <div class="brand"><span class="dot"></span> Cambodian ALPR</div>
+  <nav>
+    {% if live %}<a href="/live" class="">Live gate</a>{% endif %}
+    <a href="/" class="on">Whitelist &amp; audit</a>
+    <a href="/logout" class="quiet">Sign out</a>
   </nav>
+</div></div>
+<div class="shell">
+  <div class="head">
+    <h1>Whitelist &amp; audit log</h1>
+    <div class="sub">A plate opens the gate only if its composed text <b>exactly</b>
+      matches an authorized row <b>and</b> the reader confidence is at least 0.70.</div>
+  </div>
 
-  {% if msg %}<div class="msg {{ msg_kind }}">{{ msg }}</div>{% endif %}
+  {% if msg %}<div class="msg {{ msg_kind }}" id="flash">{{ msg }}</div>
+  <script>
+    // Drop msg/kind from the address bar so a refresh does not replay the banner.
+    const u = new URL(location); u.searchParams.delete('msg'); u.searchParams.delete('kind');
+    history.replaceState({}, '', u);
+    setTimeout(() => { const f = document.getElementById('flash');
+      if (f) { f.style.transition = 'opacity .4s'; f.style.opacity = 0;
+               setTimeout(() => f.remove(), 400); } }, 4000);
+  </script>{% endif %}
 
-  <div class="card">
-    <h2 style="margin-top:0">➕ Register a plate</h2>
-    <form method="post" action="/add" class="row">
-      <div><label>Plate text (e.g. ភ្នំពេញ 3E-6694)</label>
-        <input name="plate_text" required size="24" placeholder="province number"></div>
-      <div><label>Owner</label><input name="owner_name" placeholder="name"></div>
-      <div><label>Vehicle</label><input name="vehicle_type" placeholder="car / moto"></div>
-      <div><button class="b-add" type="submit">Add / Authorize</button></div>
-    </form>
+  <div class="stats" style="margin-bottom:1.1rem">
+    <div class="stat"><b style="color:var(--ok)">{{ n_auth }}</b><span>Authorized</span></div>
+    <div class="stat"><b style="color:var(--bad)">{{ n_blocked }}</b><span>Blocked</span></div>
+    <div class="stat"><b>{{ n_total }}</b><span>Total plates</span></div>
+    <div class="stat"><b>{{ n_reads_total }}</b><span>Audit reads</span></div>
   </div>
 
   <div class="card">
-    <h2 style="margin-top:0">🆕 Authorize from recent reads</h2>
-    <div class="sub">Cars the camera read but that aren't authorized yet. Click
-      <b>Authorize</b> to add the <b>exact</b> text the camera read — no typing, no
-      typos. Check it matches the plate before authorizing.</div>
-    <table><tr><th>Plate (as read)</th><th>Result</th><th>When</th><th>Conf</th><th></th></tr>
-    {% for c in candidates %}
-      <tr><td class="plate">{{ c.plate_text }}</td>
-        <td class="{{ c.cls }}">{{ c.action }}</td>
-        <td class="sub">{{ c.timestamp }}</td>
-        <td>{{ c.crnn_confidence }}</td>
-        <td><form class="inline" method="post" action="/authorize">
-          <input type="hidden" name="plate_text" value="{{ c.plate_text }}">
-          <button class="b-add">Authorize</button></form></td></tr>
-    {% else %}<tr><td colspan="5" class="sub">no un-authorized reads yet</td></tr>{% endfor %}
-    </table>
+    <div class="ch"><h2>Register a plate</h2></div>
+    <div class="cb">
+      <form method="post" action="/add" class="row">
+        <div><label>Plate text</label>
+          <input name="plate_text" required placeholder="ភ្នំពេញ 3E-6694"></div>
+        <div><label>Owner</label><input name="owner_name" placeholder="name"></div>
+        <div><label>Vehicle</label><input name="vehicle_type" placeholder="car / moto"></div>
+        <div class="sm"><button class="b-primary" type="submit">Add &amp; authorize</button></div>
+      </form>
+    </div>
+    <div class="foot">Tip: copy the exact composed text from the live gate view.</div>
   </div>
 
+  {% if candidates %}
   <div class="card">
-    <h2 style="margin-top:0">🅿️ Currently inside ({{ inside|length }})</h2>
-    <div class="sub">Cars parked right now (parking mode). They clear automatically
-      on exit — use <b>Clear</b> only if a car left without being scanned.</div>
-    <table><tr><th>Plate</th><th>Entered</th><th></th></tr>
-    {% for c in inside %}
-      <tr><td class="plate">{{ c.plate_text }}</td>
-        <td class="sub">{{ c.entry_time }}</td>
-        <td><form class="inline" method="post" action="/checkout"
-              onsubmit="return confirm('Clear {{ c.plate_text }} from inside?')">
-          <input type="hidden" name="plate_text" value="{{ c.plate_text }}">
-          <button class="b-susp">Clear</button></form></td></tr>
-    {% else %}<tr><td colspan="3" class="sub">lot is empty</td></tr>{% endfor %}
-    </table>
+    <div class="ch"><h2>Authorize from recent reads</h2>
+      <span class="n">{{ candidates|length }} unregistered</span></div>
+    <div class="cb flush"><table>
+      <thead><tr><th>Plate as read</th><th>Result</th><th>When</th><th>Conf</th><th></th></tr></thead>
+      <tbody>{% for c in candidates %}
+        <tr><td class="plate">{{ c.plate_text }}</td>
+          <td><span class="pill {{ 'p-ok' if c.cls=='a-allow' else 'p-bad' if c.cls=='a-deny' else 'p-warn' }}">{{ c.action }}</span></td>
+          <td class="mono">{{ c.timestamp }}</td><td class="mono">{{ c.crnn_confidence }}</td>
+          <td style="text-align:right"><form class="inline" method="post" action="/authorize">
+            <input type="hidden" name="plate_text" value="{{ c.plate_text }}">
+            <button class="b-ok b-sm">Authorize</button></form></td></tr>
+      {% endfor %}</tbody></table></div>
   </div>
+  {% endif %}
 
-  <h2>✅ Authorized ({{ n_auth }})</h2>
-  <table><tr><th>Plate</th><th>Owner</th><th>Vehicle</th><th></th></tr>
-  {% for p in authorized %}
-    <tr><td class="plate">{{ p.plate_text }}</td><td>{{ p.owner_name }}</td>
-      <td>{{ p.vehicle_type }}</td><td>
-      <form class="inline" method="post" action="/suspend">
-        <input type="hidden" name="plate_text" value="{{ p.plate_text }}">
-        <button class="b-susp">Suspend</button></form>
-      <form class="inline" method="post" action="/delete"
-            onsubmit="return confirm('Delete {{ p.plate_text }}?')">
-        <input type="hidden" name="plate_text" value="{{ p.plate_text }}">
-        <button class="b-del">Delete</button></form></td></tr>
-  {% else %}<tr><td colspan="4" class="sub">none</td></tr>{% endfor %}
-  </table>
-
-  {% if blocked %}
-  <h2>⛔ Blocked (suspended / expired)</h2>
-  <table><tr><th>Plate</th><th>Owner</th><th>Status</th><th></th></tr>
-  {% for p in blocked %}
-    <tr><td class="plate">{{ p.plate_text }}</td><td>{{ p.owner_name }}</td>
-      <td><span class="pill bad">{{ p.status }}</span></td><td>
-      <form class="inline" method="post" action="/activate">
-        <input type="hidden" name="plate_text" value="{{ p.plate_text }}">
-        <button class="b-act">Reactivate</button></form>
-      <form class="inline" method="post" action="/delete"
-            onsubmit="return confirm('Delete {{ p.plate_text }}?')">
-        <input type="hidden" name="plate_text" value="{{ p.plate_text }}">
-        <button class="b-del">Delete</button></form></td></tr>
-  {% endfor %}</table>
+  {% if inside %}
+  <div class="card">
+    <div class="ch"><h2>Currently inside</h2><span class="n">{{ inside|length }} vehicle(s)</span></div>
+    <div class="cb flush"><table>
+      <thead><tr><th>Plate</th><th>Entered</th><th></th></tr></thead>
+      <tbody>{% for c in inside %}
+        <tr><td class="plate">{{ c.plate_text }}</td><td class="mono">{{ c.entry_time }}</td>
+          <td style="text-align:right"><form class="inline" method="post" action="/checkout"
+                onsubmit="return confirm('Clear {{ c.plate_text }} from inside?')">
+            <input type="hidden" name="plate_text" value="{{ c.plate_text }}">
+            <button class="b-warn b-sm">Clear</button></form></td></tr>
+      {% endfor %}</tbody></table></div>
+  </div>
   {% endif %}
 
   <div class="card">
-    <div style="display:flex;justify-content:space-between;align-items:center">
-      <h2 style="margin:0">🔎 Audit log</h2>
+    <div class="ch"><h2>Authorized plates</h2><span class="n">{{ n_auth }}</span></div>
+    <div class="cb flush"><table>
+      <thead><tr><th>Plate</th><th>Owner</th><th>Vehicle</th><th></th></tr></thead>
+      <tbody>{% for p in authorized %}
+        <tr><td class="plate">{{ p.plate_text }}</td><td>{{ p.owner_name }}</td>
+          <td class="mono">{{ p.vehicle_type }}</td>
+          <td style="text-align:right">
+            <form class="inline" method="post" action="/suspend">
+              <input type="hidden" name="plate_text" value="{{ p.plate_text }}">
+              <button class="b-warn b-sm">Suspend</button></form>
+            <form class="inline" method="post" action="/delete"
+                  onsubmit="return confirm('Delete {{ p.plate_text }} permanently?')">
+              <input type="hidden" name="plate_text" value="{{ p.plate_text }}">
+              <button class="b-danger b-sm">Delete</button></form></td></tr>
+      {% else %}<tr><td colspan="4" class="empty">No authorized plates yet.</td></tr>
+      {% endfor %}</tbody></table></div>
+  </div>
+
+  {% if blocked %}
+  <div class="card">
+    <div class="ch"><h2>Blocked</h2><span class="n">suspended / expired</span></div>
+    <div class="cb flush"><table>
+      <thead><tr><th>Plate</th><th>Owner</th><th>Status</th><th></th></tr></thead>
+      <tbody>{% for p in blocked %}
+        <tr><td class="plate">{{ p.plate_text }}</td><td>{{ p.owner_name }}</td>
+          <td><span class="pill p-bad">{{ p.status }}</span></td>
+          <td style="text-align:right">
+            <form class="inline" method="post" action="/activate">
+              <input type="hidden" name="plate_text" value="{{ p.plate_text }}">
+              <button class="b-ok b-sm">Reactivate</button></form>
+            <form class="inline" method="post" action="/delete"
+                  onsubmit="return confirm('Delete {{ p.plate_text }} permanently?')">
+              <input type="hidden" name="plate_text" value="{{ p.plate_text }}">
+              <button class="b-danger b-sm">Delete</button></form></td></tr>
+      {% endfor %}</tbody></table></div>
+  </div>
+  {% endif %}
+
+  <div class="card">
+    <div class="ch"><h2>Audit log</h2>
       <form class="inline" method="post" action="/clear_reads"
             onsubmit="return confirm('Delete ALL {{ n_reads_total }} audit reads? This cannot be undone. (The whitelist is NOT affected.)')">
-        <button class="b-del">🗑 Delete ALL reads ({{ n_reads_total }})</button></form>
+        <button class="b-danger b-sm">Delete all {{ n_reads_total }} reads</button></form>
     </div>
-    <form method="get" action="/" class="row">
-      <div><label>Plate contains</label><input name="q" value="{{ q }}"></div>
-      <div><label>Action</label>
-        <select name="action">
-          <option value="">any</option>
-          {% for a in actions %}<option {{ 'selected' if a==action_f }}>{{ a }}</option>{% endfor %}
-        </select></div>
-      <div><button class="b-act">Search</button></div>
-    </form>
-    <table><tr><th>Time</th><th>Read</th><th>Action</th><th>Conf</th><th>Where</th><th></th></tr>
-    {% for r in reads %}
-      <tr><td class="sub">{{ r.timestamp }}</td><td class="plate">{{ r.detected_plate }}</td>
-        <td class="{{ r.cls }}">{{ r.action }}</td><td>{{ r.crnn_confidence }}</td>
-        <td class="sub">{{ r.location }}</td>
-        <td><form class="inline" method="post" action="/delete_read"
-              onsubmit="return confirm('Delete this read ({{ r.detected_plate }})?')">
-          <input type="hidden" name="read_id" value="{{ r.id }}">
-          <button class="b-del">Delete</button></form></td></tr>
-    {% else %}<tr><td colspan="6" class="sub">no matching reads</td></tr>{% endfor %}
-    </table>
-    <p class="sub">Showing the latest {{ reads|length }}. Use search to find older ones,
-       or "Delete ALL" to clear the whole history.</p>
+    <div class="cb">
+      <form method="get" action="/" class="row">
+        <div><label>Plate contains</label><input name="q" value="{{ q }}"></div>
+        <div><label>Action</label>
+          <select name="action"><option value="">any</option>
+            {% for a in actions %}<option {{ 'selected' if a==action_f }}>{{ a }}</option>{% endfor %}
+          </select></div>
+        <div class="sm"><button class="b-ghost" type="submit">Search</button></div>
+      </form>
+    </div>
+    <div class="cb flush"><table>
+      <thead><tr><th>Time</th><th>Read</th><th>Action</th><th>Conf</th><th>Where</th><th></th></tr></thead>
+      <tbody>{% for r in reads %}
+        <tr><td class="mono">{{ r.timestamp }}</td><td class="plate">{{ r.detected_plate }}</td>
+          <td><span class="pill {{ 'p-ok' if r.cls=='a-allow' else 'p-bad' if r.cls=='a-deny' else 'p-warn' }}">{{ r.action }}</span></td>
+          <td class="mono">{{ r.crnn_confidence }}</td><td class="mono">{{ r.location }}</td>
+          <td style="text-align:right"><form class="inline" method="post" action="/delete_read"
+                onsubmit="return confirm('Delete this read ({{ r.detected_plate }})?')">
+            <input type="hidden" name="read_id" value="{{ r.id }}">
+            <button class="b-danger b-sm">Delete</button></form></td></tr>
+      {% else %}<tr><td colspan="6" class="empty">No matching reads.</td></tr>{% endfor %}
+      </tbody></table></div>
+    <div class="foot" style="display:flex;justify-content:space-between;
+         align-items:center;gap:1rem;flex-wrap:wrap">
+      <span>{{ offset + 1 }}–{{ offset + reads|length }} of {{ n_reads_total }}{% if q or action_f %} (filtered){% endif %}</span>
+      <span style="display:flex;gap:.4rem">
+        {% if offset > 0 %}
+          <a class="pager" href="/?q={{ q }}&action={{ action_f }}&offset={{ offset - per if offset - per > 0 else 0 }}">← Newer</a>
+        {% endif %}
+        {% if has_next %}
+          <a class="pager" href="/?q={{ q }}&action={{ action_f }}&offset={{ offset + per }}">Older →</a>
+        {% endif %}
+      </span>
+    </div>
   </div>
+</div>
 </body></html>""")
 
 ACTIONS = ["ENTRY_ALLOWED", "ENTRY_DENIED", "REVIEW_REQUIRED", "MANUAL_OVERRIDE", "ERROR"]
@@ -600,11 +1014,15 @@ def _db() -> PlateDatabase:
 
 
 def render(db: PlateDatabase, q: str = "", action_f: str = "",
-           msg: str = "", msg_kind: str = "ok") -> bytes:
+           msg: str = "", msg_kind: str = "ok", offset: int = 0) -> bytes:
     plates = db.get_all_registered()
     authorized = [p for p in plates if p.get("status") == "active"]
     blocked = [p for p in plates if p.get("status") != "active"]
-    reads = db.search_reads(plate=q or None, action=action_f or None, limit=25)
+    # one extra row tells us whether a "next page" exists without a COUNT query
+    PER = 25
+    page = db.search_reads(plate=q or None, action=action_f or None,
+                           limit=offset + PER + 1)[offset:]
+    reads, has_next = page[:PER], len(page) > PER
     for r in reads:
         r["cls"] = _ACT_CLS.get(r.get("action"), "act")
 
@@ -634,7 +1052,7 @@ def render(db: PlateDatabase, q: str = "", action_f: str = "",
         reads=reads, candidates=candidates, inside=db.active_sessions(),
         n_reads_total=n_reads_total,
         q=q, action_f=action_f, actions=ACTIONS, msg=msg, msg_kind=msg_kind,
-        live=LIVE is not None)
+        live=LIVE is not None, offset=offset, per=PER, has_next=has_next)
     return html.encode("utf-8")
 
 
@@ -674,6 +1092,12 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True   # browser closed the tab — nothing to send
 
     # -- live view --------------------------------------------------------- #
+    def _see_other(self, where: str):
+        """303 after a POST so a refresh never re-submits the action."""
+        self.send_response(303)
+        self.send_header("Location", where)
+        self.end_headers()
+
     def _send_json(self, obj: dict):
         body = json.dumps(obj).encode("utf-8")
         self.send_response(200)
@@ -806,8 +1230,13 @@ class Handler(BaseHTTPRequestHandler):
         qs = parse_qs(urlparse(self.path).query)
         db = _db()
         try:
+            try:
+                off = max(0, int(qs.get("offset", ["0"])[0]))
+            except ValueError:
+                off = 0
             body = render(db, q=qs.get("q", [""])[0], action_f=qs.get("action", [""])[0],
-                          msg=qs.get("msg", [""])[0], msg_kind=qs.get("kind", ["ok"])[0])
+                          msg=qs.get("msg", [""])[0], msg_kind=qs.get("kind", ["ok"])[0],
+                          offset=off)
         finally:
             db.close()
         self._send(body)
@@ -819,6 +1248,21 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/login":
             self._do_login(form)
             return
+        if path == "/live_authorize":
+            if not self._require_auth():
+                return
+            plate = (form.get("plate_text", [""])[0] or "").strip()
+            if not plate or plate == "(unreadable)":
+                self._see_other("/live")
+                return
+            db = _db()
+            try:
+                db.add_plate(plate, form.get("owner_name", ["live"])[0] or "live",
+                             "", "authorized from the live view")
+            finally:
+                db.close()
+            self._see_other("/live")
+            return
         if path in ("/live_open", "/live_estop"):
             if not self._require_auth():
                 return
@@ -829,9 +1273,7 @@ class Handler(BaseHTTPRequestHandler):
                 LIVE.system.manual_override()     # MAN-001, logged as MANUAL_OVERRIDE
             else:
                 LIVE.system.emergency_stop()      # MAN-002, toggles fail-safe
-            self.send_response(303)
-            self.send_header("Location", "/live")
-            self.end_headers()
+            self._see_other("/live")
             return
         if not self._require_auth():
             return

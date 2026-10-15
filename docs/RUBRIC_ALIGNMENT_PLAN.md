@@ -93,10 +93,10 @@ Expected budget: ResNet18 on 2.5 k × 128 px images ≈ 5–10 min per 40-epoch 
 
 ## 3. Hyperparameter tuning on the best approach (expected: C)
 
-- [ ] Grid: `lr ∈ {1e-4, 3e-4, 1e-3}` × `weight_decay ∈ {0, 1e-4}` = 6 runs, 40 epochs, seed 42. (Optional: +2 runs with `--seed 1, 2` on the winner to show variance.)
-- [ ] Select by **validation** accuracy, then report test accuracy of the selected config once. Never select on test.
-- [ ] Write `results/province_study/tuning.csv` (one row per run) and a short paragraph: what you tried, what won, what you observed (e.g. "1e-3 with pretrained weights diverged / over-fit by epoch 12").
-- [ ] If the tuned C beats the deployed `province_classifier_best.pth` on the 567 test crops, promote it (copy + config JSON) and re-run `score_pipeline.py` — otherwise leave deployment alone. Log either way.
+- [x] Grid: `lr ∈ {1e-4, 3e-4, 1e-3}` × `weight_decay ∈ {0, 1e-4}` = 6 runs, 40 epochs, seed 42. (Optional: +2 runs with `--seed 1, 2` on the winner to show variance.)
+- [x] Select by **validation** accuracy, then report test accuracy of the selected config once. Never select on test.
+- [x] Write `results/province_study/tuning.csv` (one row per run) and a short paragraph: what you tried, what won, what you observed (e.g. "1e-3 with pretrained weights diverged / over-fit by epoch 12").
+- [ ] (optional, not done) If the tuned C beats the deployed `province_classifier_best.pth` on the 567 test crops, promote it (copy + config JSON) and re-run `score_pipeline.py` — otherwise leave deployment alone. Log either way.
 
 ---
 
@@ -109,7 +109,7 @@ New script: `scripts/tools/make_study_figures.py` → `results/province_study/fi
 - [x] `fig3_confusion_matrix_C.png` — normalised, 26×26, for the winner.
 - [x] `fig4_per_class_accuracy.png` — bar chart sorted by train-set size, so imbalance ↔ accuracy is visible.
 - [x] `fig5_failure_gallery.png` — 12–16 worst misclassified test crops with true/pred labels.
-- [ ] `fig6_tuning_heatmap.png` — lr × weight_decay → val accuracy.
+- [x] `fig6_tuning_heatmap.png` — lr × weight_decay → val accuracy.
 - [x] Every figure: axis labels, units, legend, title, readable at slide size. Same colour per approach across all figures.
 
 ---
@@ -136,7 +136,7 @@ Rewrite `README.md` in this order. Keep the current system content but move it *
 - [x] Dataset: source + **license** (Plate_v4, CC BY 4.0), how crops were produced (`build_province_dataset.py`), counts per split, **class-distribution table or figure** (from `manifest.json`), known noise/bias (imbalance, near-duplicates, "other" class). Fix the false sentence "photographed and labelled for this project".
 - [x] Approaches compared: the A/B/C/D table with params, training time, hardware.
 - [x] **Results table** (single table, same test set, same metrics) + the two headline figures embedded.
-- [ ] Hyperparameter tuning summary + link to `tuning.csv`.
+- [x] Hyperparameter tuning summary + link to `tuning.csv`.
 - [x] Error analysis + limitations (short version, link to full).
 - [x] **How to run every experiment** — one command per approach + the figure script + `score_pipeline.py` for the system.
 - [ ] Weights: Drive links (or note they are committed).

@@ -22,6 +22,9 @@ Or run a task directly:
     python main.py gdrive <cmd>  # Google Drive: setup|status|sync|upload|download|cleanup
 
 Always run inside the venv (.\\.venv\\Scripts\\activate) so it uses the GPU build.
+
+python main.py admin --live
+
 """
 from __future__ import annotations
 

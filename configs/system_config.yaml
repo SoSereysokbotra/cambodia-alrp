@@ -1,5 +1,5 @@
-# camera_source: http://192.168.2.193:8080/video
-camera_source: data/annotated/test/images/
+camera_source: http://192.168.8.14:8080/video
+# camera_source: data/annotated/test/images/
 camera:
   reconnect_interval_sec: 5
   max_reconnect_attempts: 10
