@@ -112,8 +112,14 @@ plates.db
 plates.db.*
 plates.db-*
 
-# --- Presentation slides and slide build tools (local only, do not push) ---
-slides/
+# --- Presentation slides: ONLY track finalized submission deck ---
+slides/*
+!slides/So_Sereysokbotra_Cambodia_ALPR.pptx
+!slides/So_Sereysokbotra_Cambodia_ALPR.pdf
+!slides/PRESENTATION_SCRIPT.md
+!slides/PRESENTATION_EXPLANATION.md
+!slides/SLIDE_STRUCTURE.md
+!slides/assets/
 scripts/tools/build_slides*.py
 authtest.txt
 

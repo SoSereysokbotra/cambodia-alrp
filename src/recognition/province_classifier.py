@@ -51,7 +51,7 @@ class SmallCNN(torch.nn.Module):
 
 
 def build_model(arch: str, n_classes: int, pretrained: bool = False):
-    """Factory used by training and inference. arch: 'resnet18' | 'small_cnn'."""
+    """Factory used by training and inference. arch: 'resnet18' | 'small_cnn' | 'vit_b_16' | 'swin_t'."""
     if arch == "small_cnn":
         return SmallCNN(n_classes)
     if arch == "resnet18":
@@ -61,6 +61,18 @@ def build_model(arch: str, n_classes: int, pretrained: bool = False):
             model.fc = torch.nn.Linear(model.fc.in_features, n_classes)
             return model
         return build_resnet18(n_classes)
+    if arch == "vit_b_16":
+        from torchvision.models import vit_b_16, ViT_B_16_Weights
+        weights = ViT_B_16_Weights.DEFAULT if pretrained else None
+        model = vit_b_16(weights=weights)
+        model.heads.head = torch.nn.Linear(model.heads.head.in_features, n_classes)
+        return model
+    if arch == "swin_t":
+        from torchvision.models import swin_t, Swin_T_Weights
+        weights = Swin_T_Weights.DEFAULT if pretrained else None
+        model = swin_t(weights=weights)
+        model.head = torch.nn.Linear(model.head.in_features, n_classes)
+        return model
     raise ValueError(f"unknown arch: {arch!r}")
 
 

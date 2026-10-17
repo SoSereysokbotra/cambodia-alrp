@@ -64,27 +64,14 @@ def set_seed(seed: int) -> None:
 
 def make_loaders(batch: int, workers: int, framing_aug: bool = True,
                  rotate: bool = False, rotate180: bool = False,
-                 seed: int = 42):
+                 seed: int = 42, img_size: int = IMG_SIZE):
     from torchvision import datasets, transforms
     from torch.utils.data import DataLoader
 
     if framing_aug:
         # FRAMING-INVARIANCE augmentation (MODEL_IMPROVEMENT_PLAN Step 3).
-        # The classifier was fragile to WHERE the detector box lands: jittering the
-        # box flipped 70% of plates to 2-3 provinces (the live flicker). These
-        # transforms simulate that box variation at train time — random zoom/crop
-        # position (RandomResizedCrop) + random shift/scale/rotate (RandomAffine),
-        # with black fill so it also sees the box catching background — so the model
-        # learns the province regardless of exact framing.
-        # ROTATION (--rotate): degrees=180 makes the AFFINE rotate the crop to ANY
-        # angle, so the classifier reads the province upside-down / sideways too.
-        # --rotate180 (preferred for upside-down plates): flip EXACTLY 180 deg
-        # half the time. --rotate spreads the model over every angle in
-        # [-180,180], including 90 deg where a wide Khmer line is mostly cut off
-        # by the square crop — capacity spent on orientations no plate ever has.
-        # A plate on a car is upright or upside-down, so train for those two.
         rot_deg = 180 if rotate else 6
-        steps = [transforms.RandomResizedCrop(IMG_SIZE, scale=(0.60, 1.0), ratio=(0.6, 1.7))]
+        steps = [transforms.RandomResizedCrop(img_size, scale=(0.60, 1.0), ratio=(0.6, 1.7))]
         if rotate180:
             steps.append(transforms.RandomApply(
                 [transforms.RandomRotation((180, 180))], p=0.5))
@@ -99,14 +86,14 @@ def make_loaders(batch: int, workers: int, framing_aug: bool = True,
     else:
         # original (tight-crop) augmentation — kept so the old behaviour is reproducible
         train_tf = transforms.Compose([
-            transforms.Resize((IMG_SIZE, IMG_SIZE)),
+            transforms.Resize((img_size, img_size)),
             transforms.RandomRotation(6),
             transforms.ColorJitter(0.2, 0.2, 0.2),
             transforms.ToTensor(),
             transforms.Normalize(MEAN, STD),
         ])
     eval_tf = transforms.Compose([
-        transforms.Resize((IMG_SIZE, IMG_SIZE)),
+        transforms.Resize((img_size, img_size)),
         transforms.ToTensor(),
         transforms.Normalize(MEAN, STD),
     ])
@@ -183,11 +170,11 @@ def main() -> None:
                     help="L2 regularisation strength for Adam (0 = off). The "
                          "regularisation choice swept in the hyperparameter study.")
     ap.add_argument("--workers", type=int, default=4)
-    ap.add_argument("--arch", choices=["resnet18", "small_cnn"], default="resnet18",
-                    help="model architecture: resnet18 (11 M params) or a 4-block "
-                         "small_cnn baseline (~0.4 M params, from scratch only)")
+    ap.add_argument("--arch", choices=["resnet18", "small_cnn", "vit_b_16", "swin_t"], default="resnet18",
+                    help="model architecture: resnet18 (11 M params), small_cnn (~0.4 M params), "
+                         "vit_b_16 (86 M Vision Transformer), or swin_t (28 M Swin Transformer)")
     ap.add_argument("--pretrained", action="store_true",
-                    help="Use ImageNet-pretrained ResNet18 (downloads weights).")
+                    help="Use ImageNet-pretrained weights (for resnet18, vit_b_16, swin_t).")
     ap.add_argument("--freeze", action="store_true",
                     help="FEATURE EXTRACTION: freeze the backbone, train only the "
                          "classifier head. Use WITH --pretrained. Without this the "
@@ -204,10 +191,10 @@ def main() -> None:
                     help="reproduce the old tight-crop augmentation")
     ap.add_argument("--rotate", action="store_true",
                     help="add FULL rotation (any angle in [-180,180]). Broad but "
-                         "wasteful — see --rotate180.")
+                          "wasteful — see --rotate180.")
     ap.add_argument("--rotate180", action="store_true",
                     help="flip exactly 180 deg with p=0.5 — the targeted fix for "
-                         "upside-down plates (mirrors finetune_crnn.py --rotate180)")
+                          "upside-down plates (mirrors finetune_crnn.py --rotate180)")
     ap.add_argument("--seed", type=int, default=42,
                     help="random seed for Python / NumPy / PyTorch (reproducibility)")
     ap.add_argument("--run-name", default=None,
@@ -231,8 +218,9 @@ def main() -> None:
     set_seed(args.seed)
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     OUT_DIR.mkdir(parents=True, exist_ok=True)
+    img_size = 224 if args.arch in ("vit_b_16", "swin_t") else 128
     print("=" * 60)
-    print(f" TRAIN PROVINCE CLASSIFIER ({args.arch}, 26 classes)")
+    print(f" TRAIN PROVINCE CLASSIFIER ({args.arch}, {img_size}px, 26 classes)")
     print(f"   device {device} | epochs {args.epochs} | batch {args.batch}")
     print("=" * 60)
 
@@ -242,7 +230,8 @@ def main() -> None:
           f"rotate={args.rotate} | rotate180={args.rotate180} | seed={args.seed}")
     train_dl, val_dl, test_dl, train_ds = make_loaders(args.batch, args.workers,
                                                        args.framing_aug, args.rotate,
-                                                       args.rotate180, args.seed)
+                                                       args.rotate180, args.seed,
+                                                       img_size=img_size)
 
     # ImageFolder sorts class folders LEXICOGRAPHICALLY ('0','1','10',..,'2',..),
     # so its label index is NOT our numeric province id. Record the true mapping:
@@ -256,7 +245,7 @@ def main() -> None:
 
     # Head is sized to the number of populated folders; predictions are
     # translated back to true province ids via idx_to_class (saved in config).
-    if args.pretrained and args.arch != "resnet18":
+    if args.pretrained and args.arch not in ("resnet18", "vit_b_16", "swin_t"):
         print(f"[!] --pretrained has no ImageNet weights for arch={args.arch}; ignoring it.")
         args.pretrained = False
     try:
@@ -266,20 +255,22 @@ def main() -> None:
         args.pretrained = False
         model = build_model(args.arch, n_head, pretrained=False)
 
-    # TRANSFER LEARNING MODE (--freeze) — "feature extraction".
-    # Lock every ImageNet layer and train ONLY the new classification head, so
-    # the pretrained convolutions act as a fixed feature extractor. Contrast with
-    # the default, "fine-tuning", where the whole network keeps learning.
-    # Feature extraction is the safer choice on a small dataset (far fewer
-    # trainable parameters, so less to overfit); fine-tuning usually wins when
-    # there is enough data to adapt the features to the new domain.
+    def _is_head_param(name: str, arch: str) -> bool:
+        if arch == "resnet18":
+            return name.startswith("fc.")
+        if arch == "vit_b_16":
+            return name.startswith("heads.")
+        if arch == "swin_t":
+            return name.startswith("head.")
+        return False
+
     frozen = trainable = 0
     if args.freeze:
         if not args.pretrained:
             print("[!] --freeze without --pretrained freezes RANDOM weights — "
                   "that is not feature extraction. Add --pretrained.")
         for name, prm in model.named_parameters():
-            if not name.startswith("fc."):
+            if not _is_head_param(name, args.arch):
                 prm.requires_grad = False
                 frozen += prm.numel()
             else:
@@ -367,7 +358,7 @@ def main() -> None:
             torch.save(model.state_dict(), out_pth)
             out_cfg.write_text(json.dumps({
                 "n_classes": n_head, "idx_to_class": idx_to_class,
-                "img_size": IMG_SIZE, "mean": MEAN, "std": STD, "arch": args.arch,
+                "img_size": img_size, "mean": MEAN, "std": STD, "arch": args.arch,
             }, indent=2), encoding="utf-8")
             print(f"    [saved] best val_acc {val_acc*100:.2f}%")
         torch.save({"model": model.state_dict(), "optimizer": optimizer.state_dict(),
@@ -388,6 +379,7 @@ def main() -> None:
     # Everything the rubric asks to report per approach, in one JSON.
     run_meta = {
         "run_name": args.run_name, "arch": args.arch, "mode": mode,
+        "img_size": img_size,
         "pretrained": bool(args.pretrained), "frozen_backbone": bool(args.freeze),
         "seed": args.seed, "epochs": args.epochs, "batch": args.batch,
         "lr": args.lr, "weight_decay": args.weight_decay,

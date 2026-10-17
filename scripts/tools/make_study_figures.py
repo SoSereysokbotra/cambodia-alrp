@@ -49,7 +49,7 @@ FIGS = STUDY / "figures"
 MANIFEST = PROJECT_ROOT / "data" / "province_crops" / "manifest.json"
 
 # one colour per run letter, reused across every figure
-PALETTE = {"A": "#1f77b4", "B": "#ff7f0e", "C": "#2ca02c", "D": "#d62728"}
+PALETTE = {"A": "#1f77b4", "B": "#ff7f0e", "C": "#2ca02c", "D": "#d62728", "E": "#0F7C74"}
 
 
 def load_runs() -> list[dict]:

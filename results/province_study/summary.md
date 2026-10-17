@@ -4,3 +4,4 @@
 | B_resnet18_frozen | resnet18 | feature-extraction | 13,338 | 39 | 40.1 % | **42.0 %** | 43.2 % | 37.9 % | 5.3 min | Tesla T4 |
 | C_resnet18_finetune | resnet18 | fine-tuning | 11,189,850 | 31 | 92.6 % | **94.0 %** | 95.3 % | 92.4 % | 5.9 min | Tesla T4 |
 | D_smallcnn_scratch | small_cnn | from-scratch | 396,058 | 33 | 48.4 % | **46.6 %** | 47.7 % | 40.7 % | 5.3 min | Tesla T4 |
+| E_vit_b_16 | vit_b_16 | fine-tuning | 85,818,650 | 28 | 96.2 % | **95.8 %** | 96.5 % | 95.7 % | 8.0 min | Tesla T4 |
