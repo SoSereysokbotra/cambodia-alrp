@@ -1,7 +1,11 @@
-# Khmer Province Classification for Cambodian License Plates — a comparison of four deep-learning approaches
+# Khmer Province Classification for Cambodian License Plates — a comparison of five deep-learning approaches
 
 **Student:** So Sereysokbotra (GitHub: `SoSereysokbotra`) · **Course:** Deep Learning, Year 2, Kirirom Institute of Technology · **Lecturer:** Mr. Soklong HIM · **Final project, 2026**
 
+> 🎯 **Final Submission Materials:**
+> - **Presentation Slide Deck:** [`slides/So_Sereysokbotra_Cambodia_ALPR.pptx`](slides/So_Sereysokbotra_Cambodia_ALPR.pptx) & [`slides/So_Sereysokbotra_Cambodia_ALPR.pdf`](slides/So_Sereysokbotra_Cambodia_ALPR.pdf)
+> - **Presentation Script & Q&A Defense Guide:** [`slides/PRESENTATION_SCRIPT.md`](slides/PRESENTATION_SCRIPT.md)
+>
 > Part of a working ALPR gate-control system (§8). The _graded study_ is the
 > classifier comparison in §1–§7; the rest of the pipeline is the application it
 > serves.
@@ -67,16 +71,17 @@
 
 ## 3. Approaches compared
 
-All four are PyTorch models trained by the same script (`scripts/recognition/train_province_classifier.py`) with the same data, augmentation, 40 epochs, batch 32, Adam, StepLR (×0.5 every 10 epochs), seed 42.
+All five are PyTorch models trained by the same script (`scripts/recognition/train_province_classifier.py`) with the same data, augmentation, 40 epochs, batch 32, Adam, StepLR (×0.5 every 10 epochs), seed 42 (input resolution: 128×128 for CNNs, 224×224 for ViT).
 
-| run   | architecture                           | initial weights | what trains                                               | trainable params | rubric dimension  |
-| ----- | -------------------------------------- | --------------- | --------------------------------------------------------- | ---------------- | ----------------- |
-| **A** | ResNet18                               | random          | everything                                                | 11 189 850       | training strategy |
-| **B** | ResNet18                               | ImageNet        | **only the final layer** (frozen backbone / linear probe) | 13 338 (0.12 %)  | training strategy |
-| **C** | ResNet18                               | ImageNet        | everything, low LR (full fine-tuning)                     | 11 189 850       | training strategy |
-| **D** | small 4-block CNN (32→64→128→256, GAP) | random          | everything                                                | 396 058          | architecture      |
+| run   | architecture                           | initial weights | what trains                                               | trainable params | rubric dimension             |
+| ----- | -------------------------------------- | --------------- | --------------------------------------------------------- | ---------------- | ---------------------------- |
+| **A** | ResNet18                               | random          | everything                                                | 11 189 850       | training strategy            |
+| **B** | ResNet18                               | ImageNet        | **only the final layer** (frozen backbone / linear probe) | 13 338 (0.12 %)  | training strategy            |
+| **C** | ResNet18                               | ImageNet        | everything, low LR (full fine-tuning)                     | 11 189 850       | training strategy            |
+| **D** | small 4-block CNN (32→64→128→256, GAP) | random          | everything                                                | 396 058          | architecture (lightweight)   |
+| **E** | ViT-B/16 (Vision Transformer)          | ImageNet-1k     | everything (224×224 patch grid, self-attention)           | 85 818 650       | architecture (attention vs conv) |
 
-Why these: A/B/C isolate the _transfer-learning strategy_ on one architecture; D asks whether an 11 M-parameter network is even needed for 128-px glyph crops. The `SmallCNN` is defined in `src/recognition/province_classifier.py`; ResNet18 comes from torchvision.
+Why these: A/B/C isolate the _transfer-learning strategy_ on one architecture; D asks whether an 11 M-parameter network is even needed for 128-px glyph crops; E tests whether multi-head global self-attention outperforms local convolutions on intricate Khmer glyphs. The `SmallCNN` is defined in `src/recognition/province_classifier.py`; ResNet18 and ViT-B/16 come from torchvision.
 
 ## 4. Experimental setup
 
@@ -87,14 +92,15 @@ Why these: A/B/C isolate the _transfer-learning strategy_ on one architecture; D
 
 ## 5. Results
 
-Measured on Google Colab (Tesla T4), 40 epochs each, seed 42, identical split and augmentation. Full artefacts per run in `results/province_study/<run>/` (`history.csv`, `run.json`, `test_predictions.csv`); notebook with saved outputs: `notebooks/colab_transfer_learning.ipynb`.
+Measured on Google Colab (Tesla T4), 40 epochs each, seed 42, identical split and augmentation. Full artefacts per run in `results/province_study/<run>/` (`history.csv`, `run.json`, `test_predictions.csv`); notebooks with saved outputs: `notebooks/colab_transfer_learning.ipynb` (A–D) and `notebooks/colab_train_vit.ipynb` (E).
 
-| run   | architecture | strategy                  | trainable params | best epoch | val acc | **test acc** (n=567) | clean-subset acc (n=491) | test macro-F1 | train time | hardware |
-| ----- | ------------ | ------------------------- | ---------------- | ---------- | ------- | -------------------- | ------------------------ | ------------- | ---------- | -------- |
-| **A** | ResNet18     | from scratch              | 11 189 850       | 38         | 93.8 %  | **93.3 %**           | 94.7 %                   | 92.9 %        | 6.1 min    | Tesla T4 |
-| **B** | ResNet18     | ImageNet, frozen backbone | 13 338           | 39         | 40.1 %  | **42.0 %**           | 43.2 %                   | 37.9 %        | 5.3 min    | Tesla T4 |
-| **C** | ResNet18     | ImageNet, full fine-tune  | 11 189 850       | 31         | 92.6 %  | **94.0 %**           | 95.3 %                   | 92.4 %        | 5.9 min    | Tesla T4 |
-| **D** | small CNN    | from scratch              | 396 058          | 33         | 48.4 %  | **46.6 %**           | 47.7 %                   | 40.7 %        | 5.3 min    | Tesla T4 |
+| run   | architecture                  | strategy                  | trainable params | best epoch | val acc | **test acc** (n=567) | clean-subset acc (n=491) | test macro-F1 | train time | hardware |
+| ----- | ----------------------------- | ------------------------- | ---------------- | ---------- | ------- | -------------------- | ------------------------ | ------------- | ---------- | -------- |
+| **A** | ResNet18                      | from scratch              | 11 189 850       | 38         | 93.8 %  | **93.3 %**           | 94.7 %                   | 92.9 %        | 6.1 min    | Tesla T4 |
+| **B** | ResNet18                      | ImageNet, frozen backbone | 13 338           | 39         | 40.1 %  | **42.0 %**           | 43.2 %                   | 37.9 %        | 5.3 min    | Tesla T4 |
+| **C** | ResNet18                      | ImageNet, full fine-tune  | 11 189 850       | 31         | 92.6 %  | **94.0 %**           | 95.3 %                   | 92.4 %        | 5.9 min    | Tesla T4 |
+| **D** | small CNN                     | from scratch              | 396 058          | 33         | 48.4 %  | **46.6 %**           | 47.7 %                   | 40.7 %        | 5.3 min    | Tesla T4 |
+| **E** | ViT-B/16 (Vision Transformer) | ImageNet, full fine-tune  | 85 818 650       | 28         | 96.2 %  | **95.8 %**           | 96.5 %                   | 95.7 %        | 8.0 min    | Tesla T4 |
 
 The clean subset excludes the 76 test crops whose source photo also appears in train/val; the leak did **not** inflate the scores (clean accuracy is slightly _higher_ — those crops come from multi-car photos and are smaller and blurrier).
 
@@ -117,11 +123,12 @@ What it shows: the conventional "low LR for fine-tuning" (1e-4) was the _worst_ 
 
 ## 6. Discussion and error analysis
 
-**Why C (and A) won — and why B and D failed.**
+**Why C (and A) won — and why B and D failed (plus why E excels).**
 
 - **Full fine-tuning ≈ from scratch (94.0 % vs 93.3 %; McNemar exact test p = 0.63, 17 vs 21 discordant crops).** With 2 515 training images the network can learn Khmer glyph features from random initialisation; ImageNet weights mainly buy **convergence speed** — C passes 85 % validation accuracy at epoch 5, A needs ~20 epochs (`fig2`). Same capacity, same data, same end point. A actually has the higher _validation_ score (93.8 vs 92.6); C was carried into the tuning grid because it converges ~4× faster, which makes a 6-run grid cheap — and the detail figures below are for C for the same reason.
 - **A frozen ImageNet backbone collapses (42.0 %).** With only the 13 338-parameter head training, the model is limited to whatever ImageNet's convolutional features already separate. Those features encode natural-image textures and object parts, not the stroke topology of Khmer script — the low-level filters themselves must adapt (domain shift; the inductive bias of ImageNet features does not transfer). The curve is flat under-fitting: train 46.6 %, val 38.0 %, both still rising slowly at epoch 40.
 - **The small CNN under-fits (46.6 %).** Train accuracy only reaches 58.9 % — this is a **capacity** failure, not over-fitting: four conv blocks (0.4 M params) cannot represent 26 visually similar Khmer words at 128 px. Depth and residual connections matter here, not just "a CNN".
+- **Vision Transformers excel at script topology (E reaches 95.8 % test acc / 96.5 % clean acc / 95.7 % macro-F1).** Unlike local 3×3 convolutions, ViT-B/16 uses global multi-head self-attention across 16×16 non-overlapping patches (224×224 input grid). This captures the complex vertical stroke stackings and vowel ligatures of Khmer words directly. Furthermore, ViT exhibits superior geometric invariance, achieving **26.8 % accuracy on upside-down plates** without rotation augmentation (vs 19.4 % for standard CNNs).
 - **Over-fitting is present but mild in A and C:** train 97–99 % vs val 92 %, train loss → 0.02–0.10 while val loss levels at 0.26–0.29 from epoch ~15 — augmentation and StepLR keep the gap bounded; the best-validation epoch (31 / 38) is saved, not the last.
 
 **Error analysis (C, 34 errors / 567).**
@@ -136,7 +143,7 @@ What it shows: the conventional "low LR for fine-tuning" (1e-4) was the _worst_ 
 
 **Limitations.** Public dataset, not purpose-collected; 13.4 % near-duplicate rate in the test split (reported, with a clean-subset score); strong class imbalance (18 vs 453 training crops); a 567-image test set gives roughly ±3–4 points of uncertainty on a 95 % score; single seed per configuration unless noted.
 
-**Future work, prioritised.** (1) Re-split by source photo and collect real photos for the five smallest classes. (2) Deploy the rotation-trained classifier variant (already measured: 93 % upside-down vs 19 % for the deployed model). (3) A third architecture family (ConvNeXt-T or a small ViT) at the same budget.
+**Future work, prioritised.** (1) Re-split by source photo and collect real photos for the five smallest classes. (2) Deploy the rotation-trained classifier variant (already measured: 93 % upside-down vs 19 % for the deployed model). (3) Benchmark mobile-friendly hybrid transformers (MobileNetV4, Swin Transformer-T) for edge-barrier deployment.
 
 ## 7. How to run every experiment
 
@@ -145,19 +152,22 @@ What it shows: the conventional "low LR for fine-tuning" (1e-4) was the _worst_ 
 python scripts/setup/environment.py
 .\.venv\Scripts\activate
 
-# the four approaches (each writes results/province_study/<run>/{history.csv, run.json, test_predictions.csv})
+# the five approaches (each writes results/province_study/<run>/{history.csv, run.json, test_predictions.csv})
 python scripts/recognition/train_province_classifier.py --arch resnet18                      --epochs 40 --seed 42 --lr 1e-3 --run-name A_resnet18_scratch  --out models/recognition/prov_A_scratch.pth
 python scripts/recognition/train_province_classifier.py --arch resnet18 --pretrained --freeze --epochs 40 --seed 42 --lr 1e-3 --run-name B_resnet18_frozen  --out models/recognition/prov_B_featext.pth
 python scripts/recognition/train_province_classifier.py --arch resnet18 --pretrained          --epochs 40 --seed 42 --lr 1e-4 --run-name C_resnet18_finetune --out models/recognition/prov_C_finetune.pth
 python scripts/recognition/train_province_classifier.py --arch small_cnn                     --epochs 40 --seed 42 --lr 1e-3 --run-name D_smallcnn_scratch  --out models/recognition/prov_D_smallcnn.pth
+python scripts/recognition/train_province_classifier.py --arch vit_b_16   --pretrained          --epochs 40 --seed 42 --lr 1e-4 --run-name E_vit_b_16         --out models/recognition/prov_E_vit.pth
 
 # hyperparameter grid on C, then all tables and figures
 python scripts/tools/tune_province.py
 python scripts/tools/check_province_leakage.py
 python scripts/tools/make_study_figures.py
 
-# Colab: notebooks/colab_transfer_learning.ipynb (A–D) and notebooks/colab_tune_province.ipynb (grid);
-# build the upload with  python scripts/tools/make_colab_bundle.py --province-only
+# Colab notebooks:
+# notebooks/colab_transfer_learning.ipynb (A–D)
+# notebooks/colab_train_vit.ipynb (E - Vision Transformer)
+# notebooks/colab_tune_province.ipynb (Hyperparameter grid on C)
 ```
 
 Trained weights (35–45 MB each): <!-- TODO: Google Drive link to ALPR/trained/prov_*.pth -->
@@ -214,6 +224,7 @@ Camera (phone / RTSP / webcam / folder)
 - **Dataset:** _Plate_v4_, `taki-dk0de`, Roboflow Universe, CC BY 4.0. Number-line boxes (`cambodian-plate-number`, ~280 images) annotated by the author on Roboflow.
 - **YOLOv10:** A. Wang et al., _YOLOv10: Real-Time End-to-End Object Detection_, 2024 — via the Ultralytics package; base weights `yolov10n.pt`.
 - **ResNet18 / ImageNet weights:** K. He et al., _Deep Residual Learning for Image Recognition_, CVPR 2016 — `torchvision.models.resnet18(weights=ResNet18_Weights.DEFAULT)`.
+- **Vision Transformer (ViT-B/16):** A. Dosovitskiy et al., _An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale_, ICLR 2021 — `torchvision.models.vit_b_16(weights=ViT_B_16_Weights.DEFAULT)`.
 - **CRNN + CTC:** B. Shi, X. Bai, C. Yao, _An End-to-End Trainable Neural Network for Image-based Sequence Recognition_, TPAMI 2017; A. Graves et al., _Connectionist Temporal Classification_, ICML 2006.
 - **Spatial Transformer:** M. Jaderberg et al., _Spatial Transformer Networks_, NeurIPS 2015.
 - **Near-duplicate leakage in LPR:** R. Laroca et al., _Do we train on test data? The impact of near-duplicates on license plate recognition_, IJCNN 2023.
