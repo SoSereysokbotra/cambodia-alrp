@@ -253,3 +253,17 @@ Thank you for your time. I am now open to your questions.
 ### Q7: "What would you do differently if you started over?"
 > **Answer:**  
 > "I would perform the train/val/test split by source photo rather than by cropped bounding box from day one. That single step would have completely eliminated the 13.4% multi-car image overlap."
+
+### Q8: "Can your system handle upside-down (inverted) license plates?"
+> **Answer:**  
+> "Yes! In our baseline benchmark on Slide 8, models without rotation training only achieve 19.4% (ResNet) and 26.8% (ViT). However, in my project code, I specifically trained a dedicated rotation model using `--rotate180` data augmentation (`province_classifier_rot2.pth`), and it successfully achieved **93.3% accuracy on upside-down plates**, while our CRNN number reader achieves **51.7%**."
+
+### Q9: "Why did you use 128×128 resolution for CNNs and 224×224 for ViT?"
+> **Answer:**  
+> "Two simple reasons:  
+> 1. For CNNs, real Khmer plate crops are naturally small (~120×40 px). Using 128×128 preserves sharp stroke detail, cuts computation by 67%, and runs in under 4 ms for real-time barrier gates.  
+> 2. For ViT, it is an architectural requirement: pretrained Vision Transformers divide images into a 14×14 grid of 16×16 patches, which natively requires 224×224 to match their pretrained positional embeddings."
+
+### Q10: "How many layers / hidden layers are in your CNN?"
+> **Answer:**  
+> "Our main model is ResNet-18, which has 18 layers with weights: 17 convolutional feature extraction layers and 1 fully connected output layer for the 26 classes (~11.2 million parameters). For comparison, our small baseline CNN (Approach D) has 4 convolutional layers and 1 output layer (~400k parameters)."
